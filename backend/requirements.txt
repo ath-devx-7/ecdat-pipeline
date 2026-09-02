@@ -6,3 +6,8 @@ pydantic>=2.7
 pydantic-settings>=2.3
 PyYAML>=6.0
 pytest>=8.2
+
+# Step 2 — intake API. httpx backs starlette's TestClient.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27

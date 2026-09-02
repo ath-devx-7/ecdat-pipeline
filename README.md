@@ -25,7 +25,8 @@ Built one step at a time per `BUILD_PLAN.md`.
 | Step | Component | State |
 |---|---|---|
 | 1 | DB schema, Alembic, policy loader | done |
-| 2–14 | intake, collectors, analysis, UI, reports | not started |
+| 2 | Intake — staging, surface scan, approval gate | done |
+| 3–14 | demo env, collectors, analysis, UI, reports | not started |
 
 ## Backend — local setup
 
@@ -47,6 +48,37 @@ a `backend/.env` file is picked up if present. The migration also runs against S
 (`ECDAT_DATABASE_URL="sqlite+pysqlite:///ecdat.sqlite"`), which is how the test suite runs
 without a database server. Postgres is the only supported store for real scans — the schema
 uses `jsonb`, `uuid`, `timestamptz` and native enum types.
+
+## Running the API
+
+```bash
+cd backend
+uvicorn app.main:app --reload      # http://127.0.0.1:8000/docs
+```
+
+The policy pack loads on startup, before the first request is served; a pack that fails
+validation stops the process there rather than answering with uncited verdicts later.
+
+### Intake endpoints
+
+| Endpoint | Does |
+|---|---|
+| `POST /api/scans` | Creates the scan, stamps the policy version, stages the source and enumerates it. Ends `awaiting_approval` — or `running` for `probe_only`, which stages nothing. |
+| `GET /api/scans/{id}/files` | The surface scan as a nested tree, with per-directory file counts and sizes for the checkbox UI. |
+| `POST /api/scans/{id}/approve` | The permission gate. Approval is set to *exactly* the submitted path list, so nothing stays in scope silently. |
+
+```bash
+curl -X POST localhost:8000/api/scans -H 'content-type: application/json'   -d '{"mode":"files","source_type":"folder","source_ref":"/srv/app","data_lifetime_years":20}'
+curl localhost:8000/api/scans/$ID/files
+curl -X POST localhost:8000/api/scans/$ID/approve -H 'content-type: application/json'   -d '{"paths":["etc/nginx/nginx.conf","app/crypto.py"]}'
+```
+
+The surface scan records path and size only — no file is opened until its path has been
+approved. `folder` sources are read where they live; `github` and `docker_image` sources
+are staged under `ECDAT_WORK_ROOT/{scan_id}`, image layers merged in manifest order with
+whiteouts skipped. `.git` is pruned from the walk (`ECDAT_SURFACE_EXCLUDE_DIRS`): packed
+objects are not deployed artefacts and would consume the file cap before a single source
+file reached the approval screen.
 
 ## Policy pack
 

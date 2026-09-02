@@ -29,8 +29,18 @@ class Settings(BaseSettings):
     scan_timeout_seconds: int = 600
     max_probe_targets: int = 20
 
-    # Where staged sources land.
+    # Where staged sources land. `folder` sources are read in place and never copied.
     work_root: Path = Path("/tmp/ecdat")
+
+    # Staging subprocess budgets. Cloning and `docker save` are the only two
+    # outbound operations in the product, and both are user-initiated (§1).
+    git_clone_timeout_seconds: int = 300
+    docker_save_timeout_seconds: int = 600
+
+    #: Directory names pruned during the surface scan. `.git` holds packed
+    #: objects that are not deployed artefacts and would consume the file cap
+    #: before a single source file were offered for approval.
+    surface_exclude_dirs: tuple[str, ...] = (".git",)
 
 
 @lru_cache(maxsize=1)
