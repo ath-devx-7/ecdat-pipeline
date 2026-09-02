@@ -1,2 +1,12 @@
 CLAUDE.md
 BUILD_PLAN.md
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local runtime artefacts
+.env
+*.sqlite

@@ -1,0 +1,59 @@
+# Policy engine lookup table (SPEC.md §6, §10). Pure lookup — no heuristics.
+#
+# Every entry MUST carry a `source` citation. The loader rejects any entry
+# without one, naming the offending id.
+#
+# broken_now and quantum_vulnerable are INDEPENDENT classifications, not two
+# points on one severity scale. RSA-4096 is quantum_vulnerable and perfectly
+# secure today; MD5 is broken today and irrelevant to quantum.
+#
+# AES and SHA-256 are quantum_safe. Grover weakens symmetric crypto, it does
+# not break it. Never classify them quantum_vulnerable.
+entries:
+  - id: md5-hash
+    family: MD5
+    oid: "1.2.840.113549.2.5"
+    primitive: hash
+    verdict: broken_now
+    source: "NIST SP 800-131A Rev.2"
+
+  - id: sha1-signature
+    family: SHA-1
+    primitive: signature
+    verdict: broken_now
+    source: "NIST SP 800-131A Rev.2"
+
+  - id: rsa-weak-key
+    family: RSA
+    condition: { key_size_lt: 2048 }
+    verdict: broken_now
+    source: "NIST SP 800-131A Rev.2"
+
+  - id: rsa-quantum
+    family: RSA
+    primitive: [key_exchange, signature]
+    verdict: quantum_vulnerable
+    source: "NIST IR 8547"
+
+  - id: ecc-quantum
+    family: [ECDSA, ECDH, EdDSA]
+    verdict: quantum_vulnerable
+    source: "NIST IR 8547"
+
+  - id: aes-safe
+    family: AES
+    condition: { key_size_gte: 128 }
+    verdict: quantum_safe
+    source: "NIST IR 8547"
+
+  - id: aes-ecb
+    family: AES
+    condition: { mode: ECB }
+    verdict: broken_now
+    source: "OWASP Cryptographic Storage Cheat Sheet"
+
+  - id: tls-legacy
+    family: TLS
+    condition: { protocol_version_lt: "1.2" }
+    verdict: broken_now
+    source: "RFC 8996"

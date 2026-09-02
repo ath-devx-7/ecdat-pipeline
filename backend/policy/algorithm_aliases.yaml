@@ -1,0 +1,6 @@
+# Identity resolution table (SPEC.md §8). Maps every observed spelling of an
+# algorithm — name variants and OIDs — onto one canonical family + OID, so the
+# dashboard does not count SHA-1, sha1 and 1.3.14.3.2.26 as three algorithms.
+#
+# Populated in build step 5 (normalizer). Empty until then.
+aliases: {}

@@ -1,0 +1,6 @@
+# TLS named-group code point → group name (SPEC.md §7.5).
+#
+# Exists because sslyze may report hybrid PQC groups such as X25519MLKEM768
+# (code point 0x11EC) as an unrecognised raw code point. Populated in build
+# step 7 once the installed sslyze's actual behaviour has been observed.
+groups: {}

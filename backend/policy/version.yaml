@@ -1,0 +1,7 @@
+# ECDAT policy pack version stamp.
+# Read-only at runtime. Carried into an air-gapped install deliberately by a human.
+version: "2026.09"
+published: "2026-09-01"
+z_years_default: 12       # years until a cryptographically relevant quantum computer
+y_years_default: 1        # default migration duration
+staleness_warning_days: 180

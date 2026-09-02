@@ -1,0 +1,44 @@
+# Advisor rules (SPEC.md §6, §11). Matched on primitive + family, never on
+# algorithm name alone — RSA maps to ML-KEM for key exchange and ML-DSA for
+# signatures, and only the primitive distinguishes them.
+#
+# Every entry MUST carry a `source` citation.
+prefer_hybrid: true
+targets:
+  - id: kex-to-mlkem
+    match: { primitive: key_exchange, family: [RSA, ECDH, DH] }
+    target: ML-KEM-768
+    hybrid: X25519MLKEM768
+    requires:
+      protocol_min: "TLS 1.3"
+      library: "openssl>=3.5"
+    action_class: config
+    source: "NIST FIPS 203"
+
+  - id: sig-to-mldsa
+    match: { primitive: signature, family: [RSA, ECDSA, EdDSA] }
+    target: ML-DSA-65
+    requires:
+      library: "openssl>=3.5"
+    action_class: library_upgrade
+    side_effects: "ML-DSA signatures ~2.4 KB vs ~64 B for ECDSA. Check cert chains and constrained devices."
+    source: "NIST FIPS 204"
+
+  - id: sig-longlived-root
+    match: { primitive: signature, asset_lifetime_gt: 10 }
+    target: SLH-DSA-SHA2-128s
+    action_class: hardware
+    note: "Hash-based fallback for long-lived roots of trust."
+    source: "NIST FIPS 205"
+
+  - id: hash-upgrade
+    match: { primitive: hash, family: [MD5, SHA-1] }
+    target: SHA-256
+    action_class: code_change
+    source: "NIST SP 800-131A Rev.2"
+
+  - id: cipher-upgrade
+    match: { primitive: cipher, family: [DES, 3DES, RC4] }
+    target: AES-256-GCM
+    action_class: code_change
+    source: "NIST SP 800-131A Rev.2"
