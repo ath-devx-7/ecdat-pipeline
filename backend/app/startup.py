@@ -13,6 +13,7 @@ import logging
 
 from app.config import Settings, get_settings
 from app.core.normalizer import get_alias_index
+from app.core.policy import validate_rules
 from app.core.policy_loader import PolicyPack, get_policy
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,9 @@ def initialise() -> tuple[Settings, PolicyPack]:
     # citation in the alias table is a pack defect, and a pack defect stops the
     # process at startup like every other one (§6).
     aliases = get_alias_index(policy)
+    # A condition key the engine does not implement would not fail — it would
+    # widen its rule to every finding of that family. Caught here, once.
+    validate_rules(policy)
 
     logger.info(
         "policy pack %s loaded from %s (published %s, %d algorithm rules, %d PQC targets, "

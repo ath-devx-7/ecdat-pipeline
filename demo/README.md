@@ -160,7 +160,7 @@ Waves assume `data_lifetime_years = 20`, Z=12, Y=1.
 |---|---|---|---|---|
 | `nginx.conf` | config | `ssl_protocols TLSv1 TLSv1.1 TLSv1.2` declared | `config` | `broken_now` (TLS < 1.2) |
 | `nginx.conf` | config | weak `ssl_ciphers` list, 3DES and CBC-SHA1 | `config` | see gaps |
-| `nginx.conf` | config | `ssl_prefer_server_ciphers off` | `config` | `hygiene` |
+| `nginx.conf` | config | `ssl_prefer_server_ciphers off` | `config` | see gaps |
 | `openssl.cnf` | config | `MinProtocol = TLSv1.2` | `config` | n/a — a declaration |
 | `openssl.cnf` | config | `MaxProtocol = TLSv1.2` | `config` | n/a — a declaration |
 | probe 8443 | network | TLS 1.0 accepted | `live` | `broken_now` |
@@ -168,7 +168,7 @@ Waves assume `data_lifetime_years = 20`, Z=12, Y=1.
 | probe 8443 | network | TLS 1.2 accepted | `live` | — |
 | probe 8443 | network | TLS 1.3 **offered and refused** | `live` | — |
 | probe 8443 | network | accepted suites incl. `TLS_RSA_WITH_3DES_EDE_CBC_SHA` | `live` | see gaps |
-| probe 8443 | network | server does not enforce suite preference | `live` | `hygiene` |
+| probe 8443 | network | server does not enforce suite preference | `live` | see gaps |
 | probe 8443 | network | RSA-1024 key in served cert | `live` | `broken_now` |
 | probe 8443 | network | SHA-1 signature on served cert | `live` | `broken_now` |
 
@@ -226,8 +226,8 @@ the primitive gate in the whole demo.
 | `rsa-weak-key` | `rsa.generate_private_key(key_size=1024)` | `signature` | `broken_now` | `wave_0` |
 | `aes-ecb` | `Cipher(algorithms.AES(...), modes.ECB())` | `cipher` | `broken_now` | `wave_0` |
 | `weak-cipher-3des` | `algorithms.TripleDES(...)` | `cipher` | see gaps | `verify` |
-| `hardcoded-key` ×2 | byte-literal key material | — | `hygiene` | — |
-| `high-entropy-literal` | 32-char literal, Shannon entropy > 4.5 | — | `hygiene` | — |
+| `hardcoded-key` ×2 | byte-literal key material | — | see gaps | — |
+| `high-entropy-literal` | 32-char literal, Shannon entropy > 4.5 | — | see gaps | — |
 
 `source_layer: source`, `confidence: high` for the pattern matches. The entropy match
 is a *shape*, not a fact about the value — it belongs at `medium` at best, and this is
@@ -245,7 +245,7 @@ deprecated algorithm working is itself exactly the situation this tool reports.
 | `weak-hash-sha1` | `MessageDigest.getInstance("SHA-1")` | `hash` | see gaps |
 | `rsa-weak-key` | `kpg.initialize(1024)` | `signature` | `broken_now` |
 | `weak-cipher-des` | `Cipher.getInstance("DES/ECB/PKCS5Padding")` | `cipher` | see gaps |
-| `hardcoded-key` | key material as a `String` literal | — | `hygiene` |
+| `hardcoded-key` | key material as a `String` literal | — | see gaps |
 | `config-java-tls-disabled` | `jdk.tls.disabledAlgorithms` | — | `config` layer |
 | `config-java-certpath-disabled` | `jdk.certpath.disabledAlgorithms` | — | `config` layer |
 
@@ -399,16 +399,28 @@ A list of true negatives is as much a specification as a list of findings.
 
 ## Gaps in the shipped policy pack that this demo exposes
 
-The pack in `backend/policy/algorithms.yaml` is §6 verbatim. Several demo targets hit
-no rule in it and must therefore resolve to `unknown` → `verify`. That is the correct
-behaviour (§10: never guess, never assume safe), and it is worth seeing on the
-dashboard rather than papering over:
+The pack in `backend/policy/algorithms.yaml` is §6 verbatim plus the two cited entries
+listed at the end of this section. Several demo targets hit no rule in it and must
+therefore resolve to `unknown` → `verify`. That is the correct behaviour (§10: never
+guess, never assume safe), and it is worth seeing on the dashboard rather than
+papering over:
 
 | Target | Why `unknown` |
 |---|---|
 | `hashlib.sha1()`, `MessageDigest.getInstance("SHA-1")` | `sha1-signature` matches `primitive: signature`. A bare hash use is `primitive: hash` and hits nothing |
 | DES, 3DES, RC4 | `pqc_targets.yaml` has a `cipher-upgrade` rule for them, `algorithms.yaml` has no verdict entry |
 | Weak TLS 1.2 cipher suites | The pack rules on protocol versions, not on suites |
+| Every hygiene observation — `ssl_prefer_server_ciphers off`, world-readable key files, self-signed and expiring certificates, hardcoded key material | The pack rules on algorithms. These are not algorithms, so nothing in it matches them and the `hygiene` verdict has no members yet |
+| ChaCha20 | The pack's `quantum_safe` entries cite NIST documents, which do not cover a cipher NIST has not approved. A citation for it would have to come from somewhere else |
+
+Two gaps that were **not** left open, because they were omissions rather than
+demonstrations, and both were closed the way this table says gaps are closed —
+an entry with a citation, no code change:
+
+| Added in step 6 | Why it was not a deliberate gap |
+|---|---|
+| `sha2-safe` (SHA-256/384/512 → `quantum_safe`) | §6 requires SHA-256 to resolve to `quantum_safe` and prints no rule that would do it |
+| `dh-dsa-quantum` (DH, DSA → `quantum_vulnerable`) | Shor breaks discrete log as readily as factoring, and `pqc_targets.yaml` already names DH as a migration target. Ruling on ECDH but not on finite-field DH is not a demonstration of anything |
 
 Closing these is a **policy-pack edit with a citation**, not a code change — which is
 the property the pack exists to have. Each needs a `source` field or the loader

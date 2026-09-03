@@ -180,11 +180,15 @@ class ApproveResponse(BaseModel):
     status: ScanStatus
     approved_count: int
     file_count: int
-    #: Raw collector output. These are not ``findings`` rows yet — the normalizer
-    #: (§8, build step 5) is what writes them to the database, so until then the
-    #: count is the only place a run's output is visible.
+    #: Observations from the collectors, which is also the number of ``findings``
+    #: rows the normalizer wrote: it resolves identities without merging or
+    #: dropping anything (§8).
     finding_count: int = 0
     collectors: list[CollectorRunSummary] = Field(default_factory=list)
+    #: Verdicts by outcome (§10). ``broken_now`` and ``quantum_vulnerable`` are
+    #: separate keys and stay separate: they are independent classifications, and
+    #: a caller that adds them together has already lost the distinction.
+    verdict_counts: dict[str, int] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #

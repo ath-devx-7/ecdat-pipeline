@@ -21,8 +21,9 @@ swapping this loop for a queue must not require touching a single collector.
 returns; :func:`run_scan` hands what it observed to the normalizer (§8), which is
 the only thing in the system that writes ``findings`` rows. The split is why a
 collector can be tested without a database and why the store has exactly one
-door. Steps 6 to 10 hang their stages off ``run_scan`` in §4's order — alignment
-before the policy engine, then the advisor and the risk scorer.
+door. The later stages hang off ``run_scan`` in §4's order: the policy engine
+(§10) classifies what the normalizer stored, and steps 8 to 10 slot the alignment
+check in front of it and the advisor and risk scorer behind it.
 """
 
 from __future__ import annotations
@@ -39,8 +40,10 @@ from app.collectors.certs import CertificateCollector
 from app.collectors.config import ConfigCollector
 from app.config import Settings, get_settings
 from app.core.normalizer import normalize
+from app.core.policy import apply_policy
 from app.intake.selection import approved_paths
 from app.intake.stage import work_dir_for
+from app.models.analysis import VerdictRow
 from app.models.enums import CollectorName, ScanMode, ScanStatus
 from app.models.scan import Scan
 
@@ -86,6 +89,17 @@ class RunResult:
     #: renames, it does not merge — so this equals ``len(findings)`` after a
     #: stored run and stays 0 for :func:`run_collectors`, which never stores.
     stored_count: int = 0
+    #: ``verdicts`` rows written by the policy engine (§10), one per finding.
+    verdicts: tuple[VerdictRow, ...] = ()
+
+    @property
+    def verdict_counts(self) -> dict[str, int]:
+        """Findings per outcome. Deliberately five keys, never one number —
+        ``broken_now`` and ``quantum_vulnerable`` are independent (§10)."""
+        counts: dict[str, int] = {}
+        for row in self.verdicts:
+            counts[row.verdict.value] = counts.get(row.verdict.value, 0) + 1
+        return counts
 
     @property
     def failures(self) -> tuple[CollectorRun, ...]:
@@ -179,18 +193,23 @@ def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> 
 
     result = run_collectors(build_context(session, scan, settings), collectors_for(scan.mode))
     stored = normalize(session, scan.id, result.findings)
-    result = dataclass_replace(result, stored_count=len(stored))
+    # §9 puts the alignment check between these two: it runs after the store and
+    # before the policy engine, so a finding already carries its drift note by the
+    # time it is classified. Step 8 inserts it here.
+    verdicts = apply_policy(session, scan.id)
+    result = dataclass_replace(result, stored_count=len(stored), verdicts=tuple(verdicts))
 
     scan.status = result.status
     scan.completed_at = datetime.now(timezone.utc)
     session.flush()
 
     logger.info(
-        "scan %s finished %s: %d raw finding(s) from %d collector(s), %d stored",
+        "scan %s finished %s: %d raw finding(s) from %d collector(s), %d stored, %d verdict(s)",
         scan.id,
         scan.status.value,
         len(result.findings),
         len(result.runs),
         result.stored_count,
+        len(result.verdicts),
     )
     return result

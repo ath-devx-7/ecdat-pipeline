@@ -71,6 +71,7 @@ __all__ = [
     "ResolvedIdentity",
     "build_alias_index",
     "get_alias_index",
+    "identity_key",
     "layer_rank",
     "normalize",
     "reset_alias_index_cache",
@@ -156,12 +157,16 @@ def layer_rank(layer: SourceLayer) -> int:
     return LAYER_PRECEDENCE.index(layer)
 
 
-def _name_key(value: str) -> str:
+def identity_key(value: str) -> str:
     """Fold a spelling to its lookup key.
 
     Case and separators are noise: ``SHA-1``, ``SHA1`` and ``sha1`` are the same
     name written by three different tools. Everything else is preserved, so
     ``AES128-SHA`` and ``AES256-SHA`` stay distinct.
+
+    Public because the policy engine (§10) has to compare the families written in
+    ``algorithms.yaml`` against the families written here. Two implementations of
+    "are these the same name" is how the two files start disagreeing about it.
     """
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
@@ -210,7 +215,7 @@ class AliasIndex:
         text = value.strip()
         if _OID_PATTERN.match(text):
             return self.by_oid.get(text)
-        return self.by_name.get(_name_key(text))
+        return self.by_name.get(identity_key(text))
 
     def lookup(self, name: str | None, oid: str | None) -> AliasEntry | None:
         """OID first — it is an identifier, where a name is only a label."""
@@ -340,7 +345,7 @@ def build_alias_index(aliases: Mapping[str, Any]) -> AliasIndex:
         entries.append(entry)
 
         for name in entry.names:
-            key = _name_key(name)
+            key = identity_key(name)
             if not key:
                 raise AliasError(
                     f"algorithm_aliases.yaml: entry '{entry.id}': name {name!r} folds to "

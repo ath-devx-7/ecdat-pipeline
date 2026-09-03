@@ -28,7 +28,11 @@ def test_shipped_policy_pack_loads(shipped_policy_dir: Path) -> None:
     pack = load_policy(shipped_policy_dir)
 
     assert pack.version.version == "2026.09"
-    assert len(pack.algorithms) == 8
+    # §6's eight entries, plus the two step 6 added with citations: SHA-2,
+    # because §6 also requires SHA-256 to resolve to quantum_safe and the pack as
+    # printed has no rule that would do it, and DH/DSA, which the pack ruled on
+    # in pqc_targets.yaml while having no verdict for them.
+    assert len(pack.algorithms) == 10
     assert len(pack.pqc_targets) == 5
     assert pack.prefer_hybrid is True
     # The alias table arrived with the normalizer in step 5; its own validation

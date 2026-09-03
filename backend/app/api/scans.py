@@ -11,10 +11,10 @@ staging and enumeration, approval through the collector run. That is a deliberat
 prototype simplification, guarded by the file cap, the probe-target cap and the
 per-collector timeout enforced here and in ``app/runner.py``.
 
-Approval runs the collectors and, from build step 5, the normalizer that writes
-their output into ``findings``. ``finding_count`` in the response is the number of
-observations, which is also the number of rows stored: normalization resolves
-identities, it does not merge or drop observations.
+Approval runs the collectors, the normalizer that writes their output into
+``findings`` (§8) and the policy engine that gives each row a cited verdict (§10).
+``finding_count`` is the number of observations, which is also the number of rows
+stored: normalization resolves identities, it does not merge or drop them.
 """
 
 from __future__ import annotations
@@ -209,4 +209,5 @@ def approve_scan_files(
         file_count=scan.file_count,
         finding_count=len(result.findings),
         collectors=[CollectorRunSummary.model_validate(run) for run in result.runs],
+        verdict_counts=result.verdict_counts,
     )

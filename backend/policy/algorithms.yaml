@@ -40,9 +40,33 @@ entries:
     verdict: quantum_vulnerable
     source: "NIST IR 8547"
 
+  # Finite-field Diffie-Hellman and DSA. Shor breaks the discrete logarithm as
+  # readily as it breaks factoring, so leaving these out while ruling on ECDH and
+  # ECDSA would not be a deliberate gap — it would be an omission, and one the
+  # pack already contradicts: `pqc_targets.yaml`'s `kex-to-mlkem` names DH as a
+  # migration target, which is hard to square with having no verdict on it.
+  # The demo's sshd_config declares two of these (diffie-hellman-group1-sha1,
+  # group14-sha1) and they are exactly what the finding is about.
+  - id: dh-dsa-quantum
+    family: [DH, DSA]
+    verdict: quantum_vulnerable
+    source: "NIST IR 8547"
+
   - id: aes-safe
     family: AES
     condition: { key_size_gte: 128 }
+    verdict: quantum_safe
+    source: "NIST IR 8547"
+
+  # SPEC.md §6 requires SHA-256 to resolve to quantum_safe and §16 tests for it.
+  # Grover halves the preimage work against a hash the way it halves the key
+  # search against a cipher — SHA-256 is weakened, not broken, and there is no
+  # reading of that under which it is quantum_vulnerable. SHA-384 and SHA-512
+  # ride along because the same paragraph of the same citation covers them, and
+  # a pack that answered "unknown" for the stronger member of a family it has
+  # already ruled on would be answering a question it knows.
+  - id: sha2-safe
+    family: [SHA-256, SHA-384, SHA-512]
     verdict: quantum_safe
     source: "NIST IR 8547"
 
