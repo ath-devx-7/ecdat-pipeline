@@ -172,7 +172,7 @@ Waves assume `data_lifetime_years = 20`, Z=12, Y=1.
 |---|---|---|---|---|
 | `nginx.conf` | config | `ssl_protocols TLSv1 TLSv1.1 TLSv1.2` declared | `config` | `broken_now` (TLS < 1.2) |
 | `nginx.conf` | config | weak `ssl_ciphers` list, 3DES and CBC-SHA1 | `config` | see gaps |
-| `nginx.conf` | config | `ssl_prefer_server_ciphers off` | `config` | see gaps |
+| `nginx.conf` | config | `ssl_prefer_server_ciphers off` | `config` | `hygiene` (RFC 9325 §4.1) |
 | `openssl.cnf` | config | `MinProtocol = TLSv1.2` | `config` | n/a — a declaration |
 | `openssl.cnf` | config | `MaxProtocol = TLSv1.2` | `config` | n/a — a declaration |
 | probe 8443 | network | TLS 1.0 accepted | `live` | `broken_now` |
@@ -238,8 +238,8 @@ the primitive gate in the whole demo.
 | `rsa-weak-key` | `rsa.generate_private_key(key_size=1024)` | `unknown` — see below | `broken_now` | `wave_0` |
 | `aes-ecb` | `Cipher(algorithms.AES(...), modes.ECB())` | `cipher` | `broken_now` | `wave_0` |
 | `weak-cipher-3des` | `algorithms.TripleDES(...)` | `cipher` | see gaps | `verify` |
-| `hardcoded-key` ×2 | byte-literal key material | — | see gaps | — |
-| `high-entropy-literal` | 32-char literal, Shannon entropy > 4.5 | — | see gaps | — |
+| `hardcoded-key` ×2 | byte-literal key material | — | `hygiene` (CWE-321) | — |
+| `high-entropy-literal` | 32-char literal, Shannon entropy > 4.5 | — | `hygiene` (CWE-798) | — |
 
 `source_layer: source`, `confidence: high` for the pattern matches. The entropy match
 is a *shape*, not a fact about the value — it belongs at `medium` at best, and this is
@@ -250,7 +250,9 @@ the key is for, but `rsa.generate_private_key(key_size=1024)` does not, and the
 collector reports the call, not the function it sits in. It is `broken_now` on key size
 alone, which lands in `wave_0` whatever the primitive — and an RSA key of unknown use
 gets no `pqc_targets` match, so its recommendation is `unknown` rather than a guess
-between ML-DSA and ML-KEM (§11). The same holds for `kpg.initialize(1024)` in `javaapp`
+between ML-DSA and ML-KEM (§11). A 2048-bit key generated the same way is
+`quantum_vulnerable` — Shor does not care what the key is for — and goes to `verify`,
+because whether Mosca applies turns on the use nobody recorded. The same holds for `kpg.initialize(1024)` in `javaapp`
 and `RSA_generate_key_ex(rsa, 1024, ...)` in `cbin`.
 
 **Key material stays out of the database.** The `hardcoded-key` and
@@ -276,7 +278,7 @@ deprecated algorithm working is itself exactly the situation this tool reports.
 | `weak-hash-sha1` | `MessageDigest.getInstance("SHA-1")` | `hash` | see gaps |
 | `rsa-weak-key` | `kpg.initialize(1024)` | `signature` | `broken_now` |
 | `weak-cipher-des` | `Cipher.getInstance("DES/ECB/PKCS5Padding")` | `cipher` | see gaps |
-| `hardcoded-key` | key material as a `String` literal | — | see gaps |
+| `hardcoded-key` | key material as a `String` literal | — | `hygiene` (CWE-321) |
 | `config-java-tls-disabled` | `jdk.tls.disabledAlgorithms` | — | `config` layer |
 | `config-java-certpath-disabled` | `jdk.certpath.disabledAlgorithms` | — | `config` layer |
 
@@ -519,11 +521,23 @@ papering over:
 | `hashlib.sha1()`, `MessageDigest.getInstance("SHA-1")` | `sha1-signature` matches `primitive: signature`. A bare hash use is `primitive: hash` and hits nothing |
 | DES, 3DES, RC4 | `pqc_targets.yaml` has a `cipher-upgrade` rule for them, `algorithms.yaml` has no verdict entry |
 | Weak TLS 1.2 cipher suites | The pack rules on protocol versions, not on suites |
-| Every hygiene observation — `ssl_prefer_server_ciphers off`, world-readable key files, self-signed and expiring certificates, hardcoded key material | The pack rules on algorithms. These are not algorithms, so nothing in it matches them and the `hygiene` verdict has no members yet |
 | ChaCha20 | The pack's `quantum_safe` entries cite NIST documents, which do not cover a cipher NIST has not approved. A citation for it would have to come from somewhere else |
 | `no_path` recommendations | A `no_path` row comes from a `pqc_targets.yaml` entry that declares a `compensating_control` (isolation, tunnelling, replacement) instead of a `target`. The shipped pack has no such entry, so the status has no members — which is honest: nothing in the demo has been shown to have no upgrade path, and the advisor does not decide that on its own |
 | SSH key exchange held to a TLS prerequisite | `kex-to-mlkem` is written for TLS — its `requires` names a TLS 1.3 ceiling — but its `match` is on primitive and family, so it also fires on `diffie-hellman-group14-sha1` in `sshd_config`, where the TLS clause can never be observed. The row is `blocked` with `"observed": null`, which is not wrong but is not the right work plan either. The fix is a cited SSH entry (OpenSSH's `mlkem768x25519-sha256`, RFC 9370 for the hybrid method), matched on the SSH observation, not a special case in the advisor |
 | Cipher-suite preference, and hybrid PQC group support | Not a pack gap but a **tool** gap, and the collector says so out loud. sslyze 6.3.1 reports accepted and rejected suites but not whether the server enforces its own ordering, and it enumerates groups from nassl's `OpenSslEcNidEnum` — classical curves only, so `X25519MLKEM768` is never offered and its absence proves nothing. Both produce an explicit `confidence: low` finding rather than silence: a readiness percentage that counts *not measured* as *not present* is a number nobody should act on |
+
+The hygiene observations — hardcoded key material, high-entropy literals, key files on
+disk, expiring, expired and self-signed certificates, `ssl_prefer_server_ciphers off` —
+were `unknown` until the pack gained six cited entries for them. They are `hygiene` now:
+assessed, no wave, no migration target, because they are things to fix rather than to
+migrate. A scan of a repository with many test secrets (WebGoat, say) went from 46
+unknowns to none on that change alone.
+
+**The code rules inventory rather than judge.** `MessageDigest.getInstance("SHA-256")`
+and a 2048-bit `KeyPairGenerator` are recorded exactly as `"MD5"` and 1024 bits are, and
+the policy engine decides which is which. Before that change the rules matched only the
+weak spellings, so a repository's RSA-2048 keys — quantum-vulnerable, roadmap material —
+never became findings at all.
 
 Two gaps that were **not** left open, because they were omissions rather than
 demonstrations, and both were closed the way this table says gaps are closed —

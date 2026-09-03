@@ -139,7 +139,7 @@ def test_a_cipher_is_a_confidentiality_primitive_too(pack) -> None:
     assert decision.urgency_years == 9
 
 
-@pytest.mark.parametrize("primitive", [Primitive.HASH, Primitive.PROTOCOL, Primitive.UNKNOWN])
+@pytest.mark.parametrize("primitive", [Primitive.HASH, Primitive.PROTOCOL])
 def test_mosca_does_not_apply_to_anything_that_is_not_confidentiality(
     pack, primitive
 ) -> None:
@@ -154,6 +154,22 @@ def test_mosca_does_not_apply_to_anything_that_is_not_confidentiality(
     assert decision.urgency_years is None
     assert decision.wave is Wave.WAVE_3
     assert decision.rationale["hndl_applicable"] is False
+
+
+def test_an_unobserved_primitive_goes_to_verify_rather_than_to_a_wave(pack) -> None:
+    """An RSA key from a generator: vulnerable, but is it harvestable?
+
+    Nothing recorded what the key is used for. wave_3 would assume "not
+    harvestable" and wave_1 would assume the opposite; both are guesses about
+    the one input the gate turns on. The action is to find out.
+    """
+    decision = score("RSA", Primitive.UNKNOWN, Verdict.QUANTUM_VULNERABLE, pack, x=20, key_size=2048)
+
+    assert decision.wave is Wave.VERIFY
+    assert decision.urgency_years is None
+    assert "primitive was not observed" in decision.rationale["because"]
+    # A broken key of unknown use is still broken today, not a thing to verify.
+    assert score("RSA", Primitive.UNKNOWN, Verdict.BROKEN_NOW, pack, x=20).wave is Wave.WAVE_0
 
 
 # --------------------------------------------------------------------------- #

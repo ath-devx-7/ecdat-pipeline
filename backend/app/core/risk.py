@@ -183,6 +183,19 @@ def score_finding(
         # nobody has to do.
         return None
 
+    if primitive is Primitive.UNKNOWN:
+        # RSA from a key generator, an EC key with no recorded use: vulnerable,
+        # certainly, but whether Mosca applies turns on what the key does, and
+        # nothing observed that. Filing it as wave_3 would assume "not
+        # harvestable"; filing it as wave_1 would assume the opposite. The
+        # honest action is to find out.
+        return decided(
+            Wave.VERIFY,
+            "the primitive was not observed, so whether Mosca applies cannot be decided; "
+            "confirm what the key is used for",
+            None,
+        )
+
     if not confidentiality:
         reason = (
             "an authentication primitive: forging a signature later does not "

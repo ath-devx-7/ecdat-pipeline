@@ -76,7 +76,7 @@ aliases:
     primitive: hash
     oid: "1.2.840.113549.2.5"
     source: "RFC 3370 §2.1"
-    names: [MD5, md5, hashlib.md5, MD5Digest, hmac-md5, HmacMD5, MD5-96, hmac-md5-96]
+    names: [MD5, md5, hashlib.md5, MD5Digest, hmac-md5, HmacMD5, MD5-96, hmac-md5-96, MD5_Init, EVP_md5]
 
   md2:
     family: MD2
@@ -91,35 +91,35 @@ aliases:
     oid: "1.3.14.3.2.26"
     source: "RFC 3279 §2.2.1"
     names:
-      [SHA-1, SHA1, sha1, hashlib.sha1, SHA-1-96, hmac-sha1, hmac-sha1-96, HmacSHA1]
+      [SHA-1, SHA1, sha1, hashlib.sha1, SHA-1-96, hmac-sha1, hmac-sha1-96, HmacSHA1, SHA1_Init, EVP_sha1]
 
   sha-256:
     family: SHA-256
     primitive: hash
     oid: "2.16.840.1.101.3.4.2.1"
     source: "RFC 5754 §2"
-    names: [SHA-256, SHA256, sha256, hashlib.sha256, hmac-sha2-256, HmacSHA256, SHA2-256]
+    names: [SHA-256, SHA256, sha256, hashlib.sha256, hmac-sha2-256, HmacSHA256, SHA2-256, SHA256_Init, EVP_sha256]
 
   sha-384:
     family: SHA-384
     primitive: hash
     oid: "2.16.840.1.101.3.4.2.2"
     source: "RFC 5754 §2"
-    names: [SHA-384, SHA384, sha384, hmac-sha2-384, HmacSHA384, SHA2-384]
+    names: [SHA-384, SHA384, sha384, hmac-sha2-384, HmacSHA384, SHA2-384, hashlib.sha384, SHA384_Init, EVP_sha384]
 
   sha-512:
     family: SHA-512
     primitive: hash
     oid: "2.16.840.1.101.3.4.2.3"
     source: "RFC 5754 §2"
-    names: [SHA-512, SHA512, sha512, hmac-sha2-512, HmacSHA512, SHA2-512]
+    names: [SHA-512, SHA512, sha512, hmac-sha2-512, HmacSHA512, SHA2-512, hashlib.sha512, SHA512_Init, EVP_sha512]
 
   sha-224:
     family: SHA-224
     primitive: hash
     oid: "2.16.840.1.101.3.4.2.4"
     source: "RFC 5754 §2"
-    names: [SHA-224, SHA224, sha224]
+    names: [SHA-224, SHA224, sha224, hashlib.sha224, SHA224_Init, EVP_sha224]
 
   # ------------------------------------------------------------------------- #
   # X.509 signature algorithms — hash is the family, key is a component
@@ -455,7 +455,7 @@ aliases:
     mode: CBC
     oid: "2.16.840.1.101.3.4.1.2"
     source: "RFC 3565 §4.1"
-    names: [AES-128-CBC, aes128-cbc, AES128-CBC, "AES/CBC/128"]
+    names: [AES-128-CBC, aes128-cbc, AES128-CBC, "AES/CBC/128", EVP_aes_128_cbc]
 
   # ECB has its own OIDs in the NIST CSOR, and an imported CBOM identifies the
   # mode by OID as readily as by name. Resolving them here is what lets
@@ -468,7 +468,7 @@ aliases:
     mode: ECB
     oid: "2.16.840.1.101.3.4.1.1"
     source: "NIST CSOR, id-aes128-ECB"
-    names: [AES-128-ECB, aes128-ecb, AES128-ECB, "AES/ECB/128"]
+    names: [AES-128-ECB, aes128-ecb, AES128-ECB, "AES/ECB/128", EVP_aes_128_ecb]
 
   aes-192-ecb:
     family: AES
@@ -486,7 +486,7 @@ aliases:
     mode: ECB
     oid: "2.16.840.1.101.3.4.1.41"
     source: "NIST CSOR, id-aes256-ECB"
-    names: [AES-256-ECB, aes256-ecb, AES256-ECB]
+    names: [AES-256-ECB, aes256-ecb, AES256-ECB, EVP_aes_256_ecb]
 
   aes-192-cbc:
     family: AES
@@ -504,7 +504,7 @@ aliases:
     mode: CBC
     oid: "2.16.840.1.101.3.4.1.42"
     source: "RFC 3565 §4.1"
-    names: [AES-256-CBC, aes256-cbc, AES256-CBC]
+    names: [AES-256-CBC, aes256-cbc, AES256-CBC, EVP_aes_256_cbc]
 
   aes-128-gcm:
     family: AES
@@ -513,7 +513,7 @@ aliases:
     mode: GCM
     oid: "2.16.840.1.101.3.4.1.6"
     source: "RFC 5084 §3.2"
-    names: [AES-128-GCM, aes128-gcm, "aes128-gcm@openssh.com"]
+    names: [AES-128-GCM, aes128-gcm, "aes128-gcm@openssh.com", EVP_aes_128_gcm]
 
   aes-256-gcm:
     family: AES
@@ -522,7 +522,7 @@ aliases:
     mode: GCM
     oid: "2.16.840.1.101.3.4.1.46"
     source: "RFC 5084 §3.2"
-    names: [AES-256-GCM, aes256-gcm, "aes256-gcm@openssh.com"]
+    names: [AES-256-GCM, aes256-gcm, "aes256-gcm@openssh.com", EVP_aes_256_gcm]
 
   aes-128-ctr:
     family: AES
@@ -553,7 +553,7 @@ aliases:
     key_size: 56
     mode: CBC
     source: "NIST SP 800-131A Rev.2 §3"
-    names: [DES-CBC, des-cbc]
+    names: [DES-CBC, des-cbc, DES_ncbc_encrypt, DES_cbc_encrypt, EVP_des_cbc]
 
   des-ecb:
     family: DES
@@ -561,7 +561,7 @@ aliases:
     key_size: 56
     mode: ECB
     source: "NIST SP 800-131A Rev.2 §3"
-    names: [DES-ECB, des-ecb, "DES/ECB/PKCS5Padding"]
+    names: [DES-ECB, des-ecb, "DES/ECB/PKCS5Padding", DES_ecb_encrypt, EVP_des_ecb]
 
   triple-des:
     family: 3DES
@@ -570,20 +570,20 @@ aliases:
     source: "NIST SP 800-67 Rev.2"
     names:
       [3DES, TripleDES, DESede, DES-EDE3, DES-EDE3-CBC, 3des-cbc, DES-CBC3,
-       algorithms.TripleDES]
+       algorithms.TripleDES, DES_ede3_cbc_encrypt, EVP_des_ede3_cbc]
 
   rc4:
     family: RC4
     primitive: cipher
     source: "RFC 7465"
-    names: [RC4, ARC4, ARCFOUR, arcfour, arcfour128, arcfour256, algorithms.ARC4]
+    names: [RC4, ARC4, ARCFOUR, arcfour, arcfour128, arcfour256, algorithms.ARC4, RC4_set_key, EVP_rc4]
 
   chacha20:
     family: ChaCha20
     primitive: cipher
     key_size: 256
     source: "RFC 8439"
-    names: [ChaCha20, CHACHA20, chacha20, "chacha20-poly1305@openssh.com", ChaCha20Poly1305]
+    names: [ChaCha20, CHACHA20, chacha20, "chacha20-poly1305@openssh.com", ChaCha20Poly1305, EVP_chacha20, EVP_chacha20_poly1305]
 
   # ------------------------------------------------------------------------- #
   # Post-quantum algorithms — NIST FIPS 203, 204 and 205, OIDs from the CSOR.

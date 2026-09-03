@@ -35,6 +35,17 @@ entries:
     verdict: quantum_vulnerable
     source: "NIST IR 8547"
 
+  # RSA whose use was not observed — a key from a generator, a public key with
+  # no context. Shor's algorithm factors the modulus whatever the key is for, so
+  # the verdict does not depend on the primitive; only the wave does, and step 9
+  # sends an unobserved primitive to `verify` rather than guessing. Without this
+  # entry every RSA-2048 key generation in a codebase was `unknown`, which is
+  # the wrong answer to a question the pack can answer.
+  - id: rsa-quantum-any-use
+    family: RSA
+    verdict: quantum_vulnerable
+    source: "NIST IR 8547"
+
   - id: ecc-quantum
     family: [ECDSA, ECDH, EdDSA]
     verdict: quantum_vulnerable
@@ -78,6 +89,45 @@ entries:
     family: [ML-KEM, ML-DSA, SLH-DSA]
     verdict: quantum_safe
     source: "NIST FIPS 203, 204 and 205"
+
+  # ------------------------------------------------------------------------- #
+  # Hygiene — observations that are not algorithms but were assessed all the
+  # same. The collectors emit these under their own marker names (§7.1, §7.3,
+  # §7.4). Without an entry here each one fell to `unknown`, which inflated the
+  # unassessed count with findings the tool understood perfectly well. A
+  # hygiene verdict gets no wave (§12) and no migration target (§11): it is a
+  # thing to fix, not a thing to migrate.
+  # ------------------------------------------------------------------------- #
+
+  - id: hardcoded-key-material
+    family: hardcoded-key-material
+    verdict: hygiene
+    source: "CWE-321 Use of Hard-coded Cryptographic Key; OWASP Cryptographic Storage Cheat Sheet"
+
+  - id: high-entropy-literal
+    family: high-entropy-string-literal
+    verdict: hygiene
+    source: "CWE-798 Use of Hard-coded Credentials"
+
+  - id: private-key-on-disk
+    family: [private-key-file, private-key-world-readable]
+    verdict: hygiene
+    source: "NIST SP 800-57 Part 1 Rev.5 §6.1"
+
+  - id: certificate-validity
+    family: [certificate-expired, certificate-expiring]
+    verdict: hygiene
+    source: "RFC 5280 §4.1.2.5"
+
+  - id: certificate-self-signed
+    family: certificate-self-signed
+    verdict: hygiene
+    source: "RFC 5280 §6.1"
+
+  - id: tls-server-preference
+    family: tls-no-server-cipher-preference
+    verdict: hygiene
+    source: "RFC 9325 §4.1"
 
   - id: aes-ecb
     family: AES

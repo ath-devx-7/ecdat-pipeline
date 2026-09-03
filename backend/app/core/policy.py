@@ -328,6 +328,12 @@ def _warn_about_families_nothing_produces(pack: PolicyPack) -> None:
     """
     produced = {identity_key(entry.family) for entry in get_alias_index(pack).entries}
     for rule in pack.algorithms:
+        if rule.verdict == Verdict.HYGIENE.value:
+            # Hygiene entries rule on the collectors' marker names — a private
+            # key file, a hardcoded key — which are not algorithms and are
+            # deliberately absent from the alias table. Firing on an unresolved
+            # spelling is exactly how they are meant to fire.
+            continue
         unreachable = [
             str(family)
             for family in rule.family

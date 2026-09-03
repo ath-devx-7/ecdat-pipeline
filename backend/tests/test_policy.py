@@ -135,7 +135,7 @@ def test_rsa_1024_is_broken_now(pack) -> None:
 
     assert decision.verdict is Verdict.BROKEN_NOW
     assert decision.rule.id == "rsa-weak-key"
-    assert [rule.id for rule in decision.also_matched] == ["rsa-quantum"]
+    assert [rule.id for rule in decision.also_matched] == ["rsa-quantum", "rsa-quantum-any-use"]
 
 
 def test_aes_in_ecb_mode_is_broken_now_regardless_of_key_size(pack) -> None:
@@ -207,12 +207,20 @@ def test_a_stated_primitive_must_be_observed_not_assumed(pack) -> None:
     that never recorded which is not evidence of either, and treating `unknown`
     as "whichever makes the rule fire" would put a signature into a
     confidentiality wave in step 9 on the strength of a shrug.
+
+    The verdict itself does not depend on the use — Shor breaks RSA whatever the
+    key is for — so the unrestricted ``rsa-quantum-any-use`` entry still says
+    quantum_vulnerable. What stays unknown is the primitive, and step 9 sends
+    that to ``verify`` rather than to a wave.
     """
     observed = classify(finding("RSA", key_size=4096, primitive=Primitive.SIGNATURE), pack)
     unobserved = classify(finding("RSA", key_size=4096, primitive=Primitive.UNKNOWN), pack)
 
     assert observed.verdict is Verdict.QUANTUM_VULNERABLE
-    assert unobserved.verdict is Verdict.UNKNOWN
+    assert observed.rule.id == "rsa-quantum"
+    assert unobserved.verdict is Verdict.QUANTUM_VULNERABLE
+    assert unobserved.rule.id == "rsa-quantum-any-use"
+    assert "rsa-quantum" not in {rule.id for rule in unobserved.matches}
     assert unobserved.primitive is Primitive.UNKNOWN
 
 
@@ -239,7 +247,7 @@ def test_an_unmeasured_key_size_satisfies_no_size_condition(pack) -> None:
     rsa = classify(finding("RSA", key_size=None, primitive=Primitive.SIGNATURE), pack)
     aes = classify(finding("AES", key_size=None, primitive=Primitive.CIPHER), pack)
 
-    assert [rule.id for rule in rsa.matches] == ["rsa-quantum"]
+    assert [rule.id for rule in rsa.matches] == ["rsa-quantum", "rsa-quantum-any-use"]
     assert aes.verdict is Verdict.UNKNOWN
 
 
@@ -279,7 +287,7 @@ def test_the_reported_verdict_is_a_reporting_order_not_a_severity_number(pack) -
     assert Verdict.UNKNOWN not in VERDICT_PRECEDENCE
 
     decision = classify(finding("RSA", key_size=1024, primitive=Primitive.KEY_EXCHANGE), pack)
-    assert {rule.id for rule in decision.matches} == {"rsa-weak-key", "rsa-quantum"}
+    assert {rule.id for rule in decision.matches} == {"rsa-weak-key", "rsa-quantum", "rsa-quantum-any-use"}
 
 
 # --------------------------------------------------------------------------- #
@@ -427,3 +435,38 @@ def test_the_demo_scan_produces_the_verdicts_its_readme_promises(
     # …and 3DES has no entry in the pack. demo/README.md lists that as a known
     # gap, closable with a citation. `unknown` is the honest output until then.
     assert by_family["3DES"] == {Verdict.UNKNOWN}
+
+
+# --------------------------------------------------------------------------- #
+# Hygiene: assessed, not migrated
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("marker", "rule_id"),
+    [
+        ("hardcoded-key-material", "hardcoded-key-material"),
+        ("high-entropy-string-literal", "high-entropy-literal"),
+        ("private-key-file", "private-key-on-disk"),
+        ("private-key-world-readable", "private-key-on-disk"),
+        ("certificate-expired", "certificate-validity"),
+        ("certificate-expiring", "certificate-validity"),
+        ("certificate-self-signed", "certificate-self-signed"),
+        ("tls-no-server-cipher-preference", "tls-server-preference"),
+    ],
+)
+def test_the_collectors_hygiene_markers_get_a_cited_hygiene_verdict(pack, marker, rule_id) -> None:
+    """A marker the tool understood must not be reported as "not assessed".
+
+    Every one of these is emitted by a collector under its own name and arrives
+    with an unresolved identity; the entry matches the marker as its family.
+    """
+    decision = classify(finding(marker, primitive=Primitive.UNKNOWN), pack)
+
+    assert decision.verdict is Verdict.HYGIENE
+    assert decision.rule.id == rule_id
+    assert decision.source_citation and decision.source_citation != NO_RULE_CITATION
+
+
+def test_a_hygiene_verdict_still_never_outranks_broken_or_vulnerable(pack) -> None:
+    assert VERDICT_PRECEDENCE.index(Verdict.HYGIENE) > VERDICT_PRECEDENCE.index(Verdict.QUANTUM_VULNERABLE)

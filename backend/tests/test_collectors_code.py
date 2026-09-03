@@ -361,3 +361,84 @@ def test_shannon_entropy_separates_a_token_from_prose() -> None:
 def test_code_file_detection_is_by_extension() -> None:
     assert is_code_file("src/app.py") and is_code_file("A.JAVA") and is_code_file("x/y.c")
     assert not is_code_file("certs/server.crt") and not is_code_file("bin/cryptodemo")
+
+
+# --------------------------------------------------------------------------- #
+# Inventory, not judgement
+# --------------------------------------------------------------------------- #
+
+
+JAVA_STRONG = """
+import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
+import java.security.Signature;
+import javax.crypto.Cipher;
+import javax.crypto.KeyAgreement;
+import javax.crypto.Mac;
+
+public class Strong {
+    static void run() throws Exception {
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
+        Mac mac = Mac.getInstance("HmacSHA256");
+        Cipher aes = Cipher.getInstance("AES/GCM/NoPadding");
+        Signature sig = Signature.getInstance("SHA256withRSA");
+        KeyAgreement ka = KeyAgreement.getInstance("ECDH");
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+        kpg.initialize(2048);
+    }
+}
+"""
+
+PYTHON_STRONG = """
+import hashlib
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.asymmetric import rsa, ec
+
+def run(key, iv, data):
+    digest = hashlib.sha256(data).hexdigest()
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+    signing = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    agreement = ec.generate_private_key(ec.SECP256R1())
+    return digest, cipher, signing, agreement
+"""
+
+ECB_ONLY = (
+    "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes\n"
+    "def f(k):\n    return Cipher(algorithms.AES(k), modes.ECB())\n"
+)
+
+
+def test_strong_algorithms_are_inventoried_and_left_for_the_policy_engine(scan_context) -> None:
+    """The rules record what they see. An RSA-2048 key is a quantum-vulnerable asset the
+    roadmap needs even though nothing about it is broken today, and SHA-256 is a
+    quantum-safe asset the readiness percentage needs as a numerator."""
+    ctx = scan_context({"Strong.java": JAVA_STRONG, "strong.py": PYTHON_STRONG})
+
+    findings = CodeCollector().collect(ctx)
+    java = {f.algorithm_name: f for f in findings if f.evidence_location.startswith("Strong.java")}
+    python = {f.algorithm_name: f for f in findings if f.evidence_location.startswith("strong.py")}
+
+    assert java["SHA-256"].primitive is Primitive.HASH
+    assert java["HmacSHA256"].primitive is Primitive.HASH
+    assert (java["AES"].mode, java["AES"].primitive) == ("GCM", Primitive.CIPHER)
+    assert java["AES"].evidence_raw["transformation"] == "AES/GCM/NoPadding"
+    assert java["SHA256withRSA"].primitive is Primitive.SIGNATURE
+    assert java["ECDH"].primitive is Primitive.KEY_EXCHANGE
+    assert (java["RSA"].key_size, java["RSA"].primitive) == (2048, Primitive.UNKNOWN)
+
+    assert python["hashlib.sha256"].primitive is Primitive.HASH
+    assert (python["algorithms.AES"].mode, python["algorithms.AES"].primitive) == (None, Primitive.CIPHER)
+    assert python["RSA"].key_size == 4096
+    assert python["SECP256R1"].evidence_raw["observation"] == "ec_keygen"
+    # Nothing here is a hardcoded key or an ECB use.
+    assert not [f for f in findings if f.mode == "ECB"]
+    assert not [f for f in findings if f.algorithm_name == "hardcoded-key-material"]
+
+
+def test_an_ecb_use_is_recorded_once_with_its_mode(scan_context) -> None:
+    """`Cipher(algorithms.AES(k), modes.ECB())` is one use: AES-ECB, not AES beside AES-ECB."""
+    ctx = scan_context({"ecb.py": ECB_ONLY})
+
+    findings = [f for f in CodeCollector().collect(ctx) if f.algorithm_name == "algorithms.AES"]
+
+    assert [(f.mode, f.evidence_raw["observation"]) for f in findings] == [("ECB", "ecb_mode")]
