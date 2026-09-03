@@ -44,6 +44,28 @@ def test_walk_rejects_a_tree_over_the_file_cap(source_folder) -> None:
     assert "10" in message and "ECDAT_MAX_FILES_PER_SCAN" in message
 
 
+def test_the_cap_message_names_the_directory_responsible(tmp_path: Path) -> None:
+    """A committed node_modules is the usual cause, and "exceeds 5000" does not say so."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "main.py").write_text("x = 1\n", encoding="utf-8")
+    heavy = tmp_path / "frontend" / "node_modules"
+    heavy.mkdir(parents=True)
+    for index in range(40):
+        (heavy / f"dep_{index:03d}.js").write_text("//\n", encoding="utf-8")
+
+    with pytest.raises(FileCapExceeded) as excinfo:
+        walk_surface(tmp_path, max_files=10)
+
+    message = str(excinfo.value)
+    assert "41 found" in message
+    assert "frontend/node_modules (40 files)" in message
+    assert "ECDAT_SURFACE_EXCLUDE_DIRS" in message and "node_modules" in message
+
+    # Excluding it is what makes the same tree scannable.
+    files = walk_surface(tmp_path, max_files=10, exclude_dirs=("node_modules",))
+    assert [item.path for item in files] == ["app/main.py"]
+
+
 def test_walk_prunes_excluded_directories(tmp_path: Path) -> None:
     (tmp_path / ".git" / "objects").mkdir(parents=True)
     (tmp_path / ".git" / "objects" / "pack").write_bytes(b"binary")

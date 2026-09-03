@@ -376,7 +376,7 @@ All settings are environment variables prefixed `ECDAT_`, or lines in `backend/.
 | `ECDAT_SEMGREP_MAX_MEMORY_MB` | `2000` | `--max-memory`. |
 | `ECDAT_SEMGREP_EXECUTABLE` | *(the one beside the interpreter, then `PATH`)* | Override. |
 | `ECDAT_WEASYPRINT_DLL_DIRECTORIES` | *(unset)* | Directory holding Pango/GObject DLLs when they are not on the loader path. |
-| `ECDAT_SURFACE_EXCLUDE_DIRS` | `.git` | Directories pruned from the surface scan. |
+| `ECDAT_SURFACE_EXCLUDE_DIRS` | `[".git"]` | Directory names pruned from the surface scan, as a JSON list — e.g. `'[".git", "node_modules", ".venv"]'`. Excluding vendored dependencies hides any crypto they ship, so it is a choice, not the default. |
 
 ## Testing
 
@@ -471,6 +471,11 @@ queue touches no collector code.
   `apt install libpango-1.0-0 libpangoft2-1.0-0`. On Windows: the GTK3 runtime, or MSYS2's
   `mingw-w64-ucrt-x86_64-pango`, then `ECDAT_WEASYPRINT_DLL_DIRECTORIES` pointing at the
   `bin` directory holding the DLLs. `report.html` serves the report meanwhile.
+- **A small repository is rejected for exceeding the 5000-file cap** — it almost always
+  commits `node_modules`, a virtualenv or a build directory; the error names the heaviest
+  directories. Exclude them with `ECDAT_SURFACE_EXCLUDE_DIRS` (knowing that vendored
+  dependencies then go unscanned), scan a narrower path, or raise
+  `ECDAT_MAX_FILES_PER_SCAN`.
 - **The lab's image builds fail with `dial tcp 192.0.2.1:443`** — a DNS resolver is
   blackholing the registry; `demo/README.md` explains the check.
 - **The drift test skips** — it needs both `localhost:8443` and `8444` reachable; bring the

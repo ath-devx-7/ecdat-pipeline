@@ -12,11 +12,18 @@ after enumerating a million entries.
 from __future__ import annotations
 
 import os
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["FileCapExceeded", "SurfaceFile", "walk_surface"]
+__all__ = ["ATTRIBUTION_CEILING", "FileCapExceeded", "SurfaceFile", "walk_surface"]
+
+#: When the cap is hit, the walk continues counting — not recording — up to this
+#: many files so the error can say *where* they are. A committed `node_modules`
+#: is the usual answer, and "exceeds 5000" without the directory name sends the
+#: user hunting for it.
+ATTRIBUTION_CEILING = 250_000
 
 
 class FileCapExceeded(RuntimeError):
@@ -53,6 +60,10 @@ def walk_surface(
 
     pruned = set(exclude_dirs)
     found: list[SurfaceFile] = []
+    #: files per directory prefix (top level, and one level below it), kept for
+    #: the error message and nothing else
+    per_prefix: Counter[str] = Counter()
+    total = 0
 
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         # Sorted in place so both the walk order and the resulting tree are
@@ -63,9 +74,20 @@ def walk_surface(
             if name not in pruned and not os.path.islink(os.path.join(dirpath, name))
         )
         here = Path(dirpath)
+        relative_dir = here.relative_to(root).as_posix()
         for name in sorted(filenames):
             absolute = here / name
             if absolute.is_symlink():
+                continue
+            total += 1
+            for prefix in _prefixes(relative_dir):
+                per_prefix[prefix] += 1
+            if total > max_files:
+                # Past the cap: stop recording, keep counting so the message can
+                # name the directory responsible, and stop counting at a ceiling
+                # so a mistakenly pointed-at drive still fails quickly.
+                if total >= ATTRIBUTION_CEILING:
+                    break
                 continue
             try:
                 size = absolute.stat().st_size
@@ -75,12 +97,38 @@ def walk_surface(
             found.append(
                 SurfaceFile(path=absolute.relative_to(root).as_posix(), size_bytes=size)
             )
-            if len(found) > max_files:
-                raise FileCapExceeded(
-                    f"Source exceeds the file cap of {max_files} files. Scans run "
-                    "synchronously in this prototype, so the cap is a hard guard. "
-                    "Point the scan at a narrower directory, or raise "
-                    "ECDAT_MAX_FILES_PER_SCAN if this host can afford the run."
-                )
+        if total >= ATTRIBUTION_CEILING:
+            break
 
+    if total > max_files:
+        raise FileCapExceeded(_cap_message(max_files, total, per_prefix, pruned))
     return found
+
+
+def _prefixes(relative_dir: str) -> tuple[str, ...]:
+    """``"a/b/c"`` → ``("a", "a/b")``; a file at the root → ``("(root)",)``."""
+    if not relative_dir or relative_dir == ".":
+        return ("(root)",)
+    parts = relative_dir.split("/")
+    return (parts[0], "/".join(parts[:2])) if len(parts) > 1 else (parts[0],)
+
+
+def _cap_message(max_files: int, total: int, per_prefix: Counter[str], pruned: set[str]) -> str:
+    """Name the cap, the count, and the directories carrying it."""
+    # Only prefixes that carry a real share of the count: a six-file `src`
+    # beside a forty-thousand-file `node_modules` is not part of the answer.
+    heaviest = [
+        f"{prefix} ({count} files)"
+        for prefix, count in per_prefix.most_common(6)
+        if count >= total * 0.05
+    ][:3]
+    reached = "at least " if total >= ATTRIBUTION_CEILING else ""
+    where = f" The largest directories: {', '.join(heaviest)}." if heaviest else ""
+    excluded = ", ".join(sorted(pruned)) or "none"
+    return (
+        f"Source exceeds the file cap of {max_files} files ({reached}{total} found).{where} "
+        "Scans run synchronously in this prototype, so the cap is a hard guard. Point the "
+        "scan at a narrower directory, exclude directories with ECDAT_SURFACE_EXCLUDE_DIRS "
+        f"(currently: {excluded}; a JSON list such as '[\".git\", \"node_modules\"]'), or raise "
+        "ECDAT_MAX_FILES_PER_SCAN if this host can afford the run."
+    )
