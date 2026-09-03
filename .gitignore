@@ -20,3 +20,8 @@ notes/
 # demo/cbin/Makefile.
 demo/certs/
 demo/cbin/build/
+
+# Coverage data from pytest-cov
+.coverage
+.coverage.*
+htmlcov/

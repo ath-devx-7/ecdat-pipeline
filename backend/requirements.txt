@@ -6,6 +6,7 @@ pydantic>=2.7
 pydantic-settings>=2.3
 PyYAML>=6.0
 pytest>=8.2
+pytest-cov>=5.0
 
 # Step 2 — intake API. httpx backs starlette's TestClient.
 fastapi>=0.115
