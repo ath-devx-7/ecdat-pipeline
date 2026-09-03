@@ -95,6 +95,12 @@ export default function Overview() {
           {scan.data_lifetime_years !== null && <> · X = {scan.data_lifetime_years} years</>}
         </span>
         <div className="ml-auto flex items-center gap-2 text-sm">
+          <a className="btn" href={api.reportUrl(scanId)}>
+            PDF report
+          </a>
+          <a className="btn-secondary" href={api.reportHtmlUrl(scanId)} target="_blank" rel="noreferrer">
+            HTML
+          </a>
           <a className="btn-secondary" href={api.cbomUrl(scanId)}>
             Export CycloneDX
           </a>

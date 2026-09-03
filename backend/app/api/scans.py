@@ -7,6 +7,7 @@ Five endpoints, one lifecycle:
 ``POST /api/scans/{id}/approve``    the permission gate          → running
 ``POST /api/scans/{id}/cbom``       another tool's inventory, in
 ``GET  /api/scans/{id}/cbom``       this scan's inventory, out
+``GET  /api/scans/{id}/report.pdf`` the report that leaves the room (§13)
 
 Scans run synchronously (§2), so both ``POST`` endpoints block: creation through
 staging and enumeration, approval through the collector run. That is a deliberate
@@ -39,6 +40,7 @@ from app.intake.surface import FileCapExceeded, walk_surface
 from app.models.enums import RecommendationStatus, ScanMode, ScanStatus
 from app.models.scan import Scan, ScanFile
 from app.export.cyclonedx import MEDIA_TYPE, export_cbom
+from app.export.pdf import ReportUnavailable, render_html, render_pdf
 from app.runner import analyse, run_scan
 from app.schemas.scans import (
     ApproveRequest,
@@ -304,4 +306,30 @@ def export_scan_cbom(scan_id: UUID, session: Session = Depends(get_session)) -> 
         content=document,
         media_type=MEDIA_TYPE,
         headers={"Content-Disposition": f'attachment; filename="ecdat-{scan.id}.cdx.json"'},
+    )
+
+
+@router.get("/{scan_id}/report.html")
+def scan_report_html(scan_id: UUID, session: Session = Depends(get_session)) -> Response:
+    """The report as HTML — the document the PDF is rendered from, and its fallback."""
+    scan = _load_scan(session, scan_id)
+    return Response(content=render_html(session, scan), media_type="text/html; charset=utf-8")
+
+
+@router.get("/{scan_id}/report.pdf")
+def scan_report_pdf(scan_id: UUID, session: Session = Depends(get_session)) -> Response:
+    """§13's PDF report. Every verdict in it shows its citation."""
+    scan = _load_scan(session, scan_id)
+    html = render_html(session, scan)
+    try:
+        document = render_pdf(html)
+    except ReportUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"{exc} The same report is served as HTML at /api/scans/{scan.id}/report.html.",
+        ) from exc
+    return Response(
+        content=document,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="ecdat-{scan.id}.pdf"'},
     )

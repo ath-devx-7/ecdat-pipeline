@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import sqlalchemy as sa
@@ -43,6 +43,12 @@ def uuid_pk() -> Any:
 
 
 def created_at_col() -> Any:
+    # Aware UTC, the same clock `completed_at` is stamped with in the runner. A
+    # naive local default beside an aware UTC completion put two zones on one
+    # row, which the PDF report was the first thing to print side by side.
     return mapped_column(
-        TIMESTAMPTZ, nullable=False, server_default=sa.func.now(), default=datetime.now
+        TIMESTAMPTZ,
+        nullable=False,
+        server_default=sa.func.now(),
+        default=lambda: datetime.now(timezone.utc),
     )

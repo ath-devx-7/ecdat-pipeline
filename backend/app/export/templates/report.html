@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ECDAT report — scan {{ scan.id }}</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm;
+    @bottom-center { content: "ECDAT · scan {{ scan.id }} · page " counter(page) " of " counter(pages); font-size: 8pt; color: #64748b; } }
+  body { font-family: "DejaVu Sans", "Segoe UI", Arial, sans-serif; font-size: 9.5pt; color: #0f172a; line-height: 1.35; }
+  h1 { font-size: 20pt; margin: 0 0 2mm 0; }
+  h2 { font-size: 13pt; margin: 8mm 0 2mm 0; padding-bottom: 1mm; border-bottom: 1px solid #cbd5e1; page-break-after: avoid; }
+  h3 { font-size: 11pt; margin: 5mm 0 1.5mm 0; page-break-after: avoid; }
+  p { margin: 0 0 2mm 0; }
+  .muted { color: #64748b; }
+  .small { font-size: 8pt; }
+  .mono { font-family: "DejaVu Sans Mono", Consolas, monospace; font-size: 8pt; }
+  table { width: 100%; border-collapse: collapse; margin: 1.5mm 0 3mm 0; page-break-inside: auto; }
+  th, td { text-align: left; vertical-align: top; padding: 1.2mm 1.5mm; border-bottom: 1px solid #e2e8f0; }
+  th { font-size: 8pt; text-transform: uppercase; letter-spacing: .03em; color: #475569; background: #f8fafc; }
+  tr { page-break-inside: avoid; }
+  .tiles { display: flex; gap: 3mm; margin: 2mm 0 3mm 0; }
+  .tile { flex: 1; border: 1px solid #cbd5e1; border-radius: 2mm; padding: 2mm 2.5mm; }
+  .tile .n { font-size: 18pt; font-weight: 700; }
+  .tile .t { font-size: 8pt; color: #475569; text-transform: uppercase; letter-spacing: .03em; }
+  .badge { display: inline-block; padding: 0 1.2mm; border-radius: 1mm; font-size: 7.5pt; font-weight: 700; }
+  .broken_now { background: #fee2e2; color: #991b1b; }
+  .quantum_vulnerable { background: #fef3c7; color: #92400e; }
+  .quantum_safe { background: #dcfce7; color: #166534; }
+  .hygiene { background: #dbeafe; color: #1e40af; }
+  .unknown { background: #e2e8f0; color: #334155; }
+  .recommended { background: #dcfce7; color: #166534; }
+  .blocked { background: #fef3c7; color: #92400e; }
+  .no_path { background: #fee2e2; color: #991b1b; }
+  .box { border: 1px solid #cbd5e1; border-radius: 2mm; padding: 2mm 2.5mm; margin: 0 0 2.5mm 0; page-break-inside: avoid; }
+  .two { display: flex; gap: 3mm; }
+  .two > div { flex: 1; }
+  .declared { background: #eff6ff; }
+  .observed { background: #fffbeb; }
+  ol.chain { margin: 1mm 0 0 0; padding-left: 5mm; }
+  ul.cites { margin: 0; padding-left: 5mm; }
+  .note { background: #f8fafc; border-left: 3px solid #94a3b8; padding: 1.5mm 2mm; margin-top: 1.5mm; }
+</style>
+</head>
+<body>
+
+<h1>ECDAT cryptographic discovery report</h1>
+<p class="muted">Generated {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }} · Enterprise Cryptographic Discovery &amp; Analysis Tool</p>
+
+<h2>1. Scan and policy</h2>
+<table>
+  <tr><th style="width:28%">Scan</th><td class="mono">{{ scan.id }}</td></tr>
+  <tr><th>Mode</th><td>{{ scan.mode.value }}</td></tr>
+  <tr><th>Source</th><td>{{ scan.source_type.value }}{% if scan.source_ref %} · <span class="mono">{{ scan.source_ref }}</span>{% endif %}</td></tr>
+  {% if scan.probe_targets %}
+  <tr><th>Probe targets</th><td class="mono">{% for t in scan.probe_targets %}{{ t.host }}:{{ t.port }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+  {% endif %}
+  <tr><th>Status</th><td>{{ scan.status.value }}{% if scan.status.value == "partial" %} — at least one collector failed or ran out of budget; the findings are incomplete, not wrong{% endif %}</td></tr>
+  <tr><th>Created / completed (UTC)</th><td>{{ scan.created_at.strftime("%Y-%m-%d %H:%M") if scan.created_at else "—" }} / {{ scan.completed_at.strftime("%Y-%m-%d %H:%M") if scan.completed_at else "—" }}</td></tr>
+  <tr><th>Data lifetime (X)</th><td>{{ scan.data_lifetime_years if scan.data_lifetime_years is not none else "not supplied" }} years</td></tr>
+  <tr><th>Migration duration (Y)</th><td>{{ y_years }} years (policy default)</td></tr>
+  <tr><th>Quantum arrival (Z)</th><td>{{ z_years_used if z_years_used is not none else policy.z_years_default }} years{% if z_years_used is not none and z_years_used != policy.z_years_default %} — adjusted from the policy default of {{ policy.z_years_default }}{% endif %}</td></tr>
+  <tr><th>Policy pack</th><td>{{ policy.version }} · published {{ policy.published }} · {{ policy.age_days }} days old{% if policy.stale %} · <strong>older than the {{ policy.staleness_warning_days }}-day staleness window</strong>{% endif %}{% if scan.policy_version and scan.policy_version != policy.version %} · scanned under {{ scan.policy_version }}{% endif %}</td></tr>
+  <tr><th>Findings</th><td>{{ finding_count }}</td></tr>
+</table>
+
+<h2>2. Executive summary</h2>
+{% if finding_count == 0 %}
+<p>This scan produced <strong>no findings</strong>. Nothing in scope was observed to use cryptography, or nothing was approved for reading. Every section below is empty for that reason, not because anything was assessed as safe.</p>
+{% endif %}
+<div class="tiles">
+  <div class="tile"><div class="t">PQC readiness</div><div class="n">{% if readiness.percent is not none %}{{ readiness.percent }}%{% else %}—{% endif %}</div>
+    <div class="small">{{ readiness.quantum_safe }} quantum-safe of {{ readiness.assessed }} assessed · {{ readiness.unassessed }} unassessed excluded</div></div>
+  {% for status in ["recommended", "blocked", "no_path", "unknown"] %}
+  <div class="tile"><div class="t">{{ status_titles[status] }}</div><div class="n">{{ status_counts[status] }}</div></div>
+  {% endfor %}
+</div>
+<p class="small muted">Readiness is quantum-safe findings over every finding the policy pack classified as safe, vulnerable or broken. Unassessed findings are excluded and counted beside it: "not assessed" is neither safe nor vulnerable. All four recommendation statuses are shown; reporting only the recommended ones would hide the hard part of the migration.</p>
+
+<div class="two">
+  <div>
+    <h3>Verdicts</h3>
+    <table>
+      {% for verdict, count in verdict_counts.items() %}
+      <tr><td><span class="badge {{ verdict }}">{{ verdict_titles[verdict] }}</span></td><td style="text-align:right">{{ count }}</td></tr>
+      {% endfor %}
+    </table>
+    <p class="small muted">Broken-now and quantum-vulnerable are independent classifications, not two points on one scale.</p>
+  </div>
+  <div>
+    <h3>Migration waves</h3>
+    <table>
+      {% for wave, count in wave_counts.items() %}
+      <tr><td>{{ wave_titles[wave] }}</td><td style="text-align:right">{{ count }}</td></tr>
+      {% endfor %}
+      <tr><td class="muted">No wave — needs no migration</td><td style="text-align:right" class="muted">{{ unscored }}</td></tr>
+    </table>
+  </div>
+</div>
+<p><strong>Drift:</strong>
+  {% if alignment.status == "skipped" %}not checked — {{ alignment.reason }}.
+  {% else %}{{ alignment.note_count }} divergence{{ "" if alignment.note_count == 1 else "s" }} across {{ alignment.compared_services|length }} probed service{{ "" if alignment.compared_services|length == 1 else "s" }} ({{ alignment.compared_services|join(", ") }}).{% endif %}
+</p>
+
+<h2>3. Findings by wave</h2>
+{% for wave, items in waves.items() %}
+<h3>{{ wave_titles[wave] }} <span class="muted">({{ items|length }})</span></h3>
+<p class="small muted">{{ wave_explanations[wave] }}</p>
+{% if items %}
+<table>
+  <thead><tr><th style="width:18%">Algorithm</th><th>Primitive</th><th>Verdict · citation</th><th>Urgency</th><th style="width:22%">Recommendation</th><th>Where</th></tr></thead>
+  <tbody>
+  {% for row in items %}
+  <tr>
+    <td><strong>{{ row.label }}</strong>{% if row.finding.algorithm_family and row.finding.algorithm_family != row.finding.algorithm_name %}<div class="small muted">as {{ row.finding.algorithm_name }}</div>{% endif %}</td>
+    <td>{{ row.finding.primitive.value }}</td>
+    <td class="verdict">{% if row.verdict %}<span class="badge {{ row.verdict.verdict.value }}">{{ row.verdict_title }}</span><div class="small">{{ row.verdict.source_citation }}</div>{% endif %}</td>
+    <td>{% if row.score.urgency_years is not none %}+{{ row.score.urgency_years }} y{% else %}<span class="muted">n/a</span>{% endif %}</td>
+    <td>{% for rec in row.recommendations %}<span class="badge {{ rec.status.value }}">{{ status_titles[rec.status.value] }}</span> {{ rec.target or "" }}{% if rec.action_class %} <span class="small muted">({{ rec.action_class.value }})</span>{% endif %}<br>{% endfor %}</td>
+    <td class="mono">{{ row.finding.evidence_location }}<div class="small muted" style="font-family:sans-serif">{{ row.finding.collector.value }} · {{ row.finding.source_layer.value }} · {{ row.finding.confidence.value }}</div></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Empty.</p>
+{% endif %}
+{% endfor %}
+
+<h2>4. Drift — what configuration declares against what the probe observed</h2>
+{% if alignment.status == "skipped" %}
+<p class="box"><strong>Not checked.</strong> {{ alignment.reason }}. The drift check needs both halves: a configuration that declares TLS and a probed service that answers.</p>
+{% elif alignment.note_count == 0 %}
+<p class="box"><strong>Aligned.</strong> Every declaration covering a probed service ({{ alignment.compared_services|join(", ") }}) matches what the service negotiated.</p>
+{% else %}
+{% for note in alignment.notes %}
+<div class="box">
+  <div class="small muted" style="text-transform:uppercase;letter-spacing:.03em">{{ note.asset_key }}</div>
+  <div class="two">
+    <div class="declared" style="padding:1.5mm;border-radius:1.5mm">
+      <strong>Configuration declares</strong><div class="mono">{{ note.config.evidence_location }}</div>
+      <div class="small">{{ note.declared.directive or note.config.algorithm_name }} = {{ note.declared.declared if note.declared.declared is string else (note.declared.declared|join(" ") if note.declared.declared else "") }} · {{ note.declared.observation }}
+      {% if note.declared.activated_by_openssl_conf is not none %} · activated: {{ "yes" if note.declared.activated_by_openssl_conf else "no — the file is never applied" }}{% endif %}</div>
+    </div>
+    <div class="observed" style="padding:1.5mm;border-radius:1.5mm">
+      <strong>Probe observed</strong><div class="mono">{{ note.live.evidence_location }}</div>
+      <div class="small">{{ note.observed.version or note.live.algorithm_name }} {{ "accepted" if note.observed.offered else "refused" }}{% if note.observed.accepted_suite_count is not none %} · {{ note.observed.accepted_suite_count }} suites accepted, {{ note.observed.rejected_suite_count }} rejected{% endif %}</div>
+    </div>
+  </div>
+  <div class="note">{{ note.note }}</div>
+</div>
+{% endfor %}
+{% endif %}
+{% if alignment.scope_skipped %}
+<p class="small muted">Not compared (server-wide defaults a virtual host may override): {{ alignment.scope_skipped|join("; ") }}</p>
+{% endif %}
+
+<h2>5. Blocked prerequisites — the work plan</h2>
+{% if blocked %}
+<p class="small muted">A target exists for each of these, and the chain lists what stands in its way in the order it has to be cleared, the long-lead item first. "Observed: nothing" means no collector saw evidence either way; confirming it is the first work item.</p>
+{% for item in blocked %}
+<div class="box">
+  <strong>{{ item.row.label }}</strong> <span class="muted">{{ item.row.finding.primitive.value }} · <span class="mono">{{ item.row.finding.evidence_location }}</span></span><br>
+  Target <strong>{{ item.recommendation.target }}</strong>{% if item.recommendation.hybrid_target and item.recommendation.hybrid_target != item.recommendation.target %} (hybrid {{ item.recommendation.hybrid_target }}){% endif %}{% if item.recommendation.action_class %} · {{ item.recommendation.action_class.value }}{% endif %} · {{ item.recommendation.source_citation }}
+  <ol class="chain">
+    {% for p in item.recommendation.prerequisites or [] %}
+    <li><span class="mono">{{ p.unmet }}</span> — observed: {{ p.observed if p.observed else "nothing" }}{% if p.observed_at %} <span class="muted">at {{ p.observed_at }}</span>{% endif %}{% if p.note %}<div class="small muted">{{ p.note }}</div>{% endif %}</li>
+    {% endfor %}
+  </ol>
+  {% if item.recommendation.side_effects %}<div class="small">{{ item.recommendation.side_effects }}</div>{% endif %}
+</div>
+{% endfor %}
+{% else %}
+<p class="muted">No recommendation is blocked.</p>
+{% endif %}
+{% if no_path %}
+<h3>No upgrade path — compensating controls</h3>
+{% for item in no_path %}
+<div class="box"><strong>{{ item.row.label }}</strong> <span class="mono muted">{{ item.row.finding.evidence_location }}</span><br>{{ item.recommendation.side_effects }} <span class="muted">· {{ item.recommendation.source_citation }}</span></div>
+{% endfor %}
+{% endif %}
+
+<h2>6. Unknown findings — what the policy pack could not answer</h2>
+<p class="small muted">An unknown verdict means no cited entry in the pack matched the finding. It is reported as unknown rather than guessed at, and never assumed safe. Closing a gap is a policy-pack entry with a citation, not a code change.</p>
+{% if unknown_verdicts %}
+<table>
+  <thead><tr><th style="width:24%">Observed</th><th>Family</th><th>Primitive</th><th>Where</th></tr></thead>
+  <tbody>
+  {% for row in unknown_verdicts %}
+  <tr><td>{{ row.finding.algorithm_name }}</td><td>{{ row.finding.algorithm_family or "—" }}</td><td>{{ row.finding.primitive.value }}</td><td class="mono">{{ row.finding.evidence_location }} <span class="muted" style="font-family:sans-serif">({{ row.finding.collector.value }}, {{ row.finding.confidence.value }})</span></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Every finding matched a policy entry.</p>
+{% endif %}
+{% if unknown_advice %}
+<h3>Migration items with no target</h3>
+<p class="small muted">These findings need migrating but no <code>pqc_targets</code> rule names a replacement. No generic suggestion is made: a wrong recommendation is worse than an absent one.</p>
+<ul>
+{% for item in unknown_advice %}
+<li>{{ item.row.label }} <span class="muted">({{ item.row.finding.primitive.value }}, <span class="mono">{{ item.row.finding.evidence_location }}</span>)</span></li>
+{% endfor %}
+</ul>
+{% endif %}
+
+<h2>7. Methodology and citations</h2>
+<p><strong>Discovery.</strong> Six collectors observe cryptography and record what they saw in the artefact's own words: certificates and key-file metadata, configuration files, source code through Semgrep, ELF binaries through their dynamic sections, live TLS handshakes against the declared probe targets only, and imported CycloneDX inventories. Private key material is never parsed. No collector makes a network call other than the probe of a host the user named.</p>
+<p><strong>Identity.</strong> Every spelling of an algorithm is resolved to one canonical family and OID through a cited alias table, so one algorithm is counted once however many tools spelled it. Findings carry a source layer — live, artifact, config, source — ordered by closeness to execution.</p>
+<p><strong>Verdicts.</strong> A lookup against a versioned, read-only policy pack ({{ policy.version }}). Every entry carries a citation to a published standard, reproduced beside the verdict in this report. No entry matching yields <em>unknown</em>. Broken-now and quantum-vulnerable are independent: AES and SHA-256 are quantum-safe, RSA-4096 is quantum-vulnerable and secure today, MD5 is broken today and irrelevant to quantum.</p>
+<p><strong>Drift.</strong> A configuration's declared protocol floor, ceiling or list is compared per probed service against the versions the handshake accepted or refused. A divergence is reported without classifying it as a misconfiguration or an exception.</p>
+<p><strong>Risk.</strong> Mosca's inequality, (X + Y) − Z &gt; 0, where X is the data lifetime supplied for this scan, Y the migration duration and Z the years until a cryptographically relevant quantum computer. It is applied only to confidentiality primitives — key exchange and ciphers — because harvest-now-decrypt-later needs something recorded now that becomes readable later. Signatures and hashes have no harvest step, receive no urgency, and are placed in wave 3. Every input is stored on the finding so any wave can be reconstructed.</p>
+<p><strong>Recommendations.</strong> Matched on primitive plus family against the pack's migration targets; the parameter set follows the data lifetime; each prerequisite is tested against what the collectors observed on the asset; the hybrid preference is read from the pack. A target whose prerequisites are unmet is reported as blocked with the chain, and a finding no rule covers is reported as unknown rather than given a generic target.</p>
+
+<h3>Standards cited in this report</h3>
+{% if citations %}
+<ul class="cites">
+{% for citation, count in citations %}
+<li>{{ citation }} <span class="muted">({{ count }} finding{{ "" if count == 1 else "s" }})</span></li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="muted">No finding in this scan matched a cited policy entry.</p>
+{% endif %}
+<h3>Standards the policy pack {{ policy.version }} cites</h3>
+<p class="small">{{ pack_citations|join(" · ") }}</p>
+
+</body>
+</html>

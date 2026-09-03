@@ -306,6 +306,8 @@ export const api = {
       body: file,
     }),
   cbomUrl: (id: string) => `/api/scans/${id}/cbom`,
+  reportUrl: (id: string) => `/api/scans/${id}/report.pdf`,
+  reportHtmlUrl: (id: string) => `/api/scans/${id}/report.html`,
 };
 
 // The Z slider's value is remembered per scan on this browser only, so the

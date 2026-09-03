@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ECDAT",
     description=DESCRIPTION,
-    version="0.13.0",  # build step 13 — dashboard
+    version="1.0.0",  # build step 14 — the PDF report completes the plan
     lifespan=lifespan,
 )
 

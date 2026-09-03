@@ -25,3 +25,6 @@ demo/cbin/build/
 .coverage
 .coverage.*
 htmlcov/
+
+# Vendored native libraries for local tooling (WeasyPrint needs Pango on Windows)
+.tools/

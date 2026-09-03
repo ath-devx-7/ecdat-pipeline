@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     #: running interpreter, then whatever is on PATH.
     semgrep_executable: str | None = None
 
+    #: Where WeasyPrint's native libraries live when they are not on the loader
+    #: path — Pango, GObject, HarfBuzz. On Windows this is typically the GTK
+    #: runtime's or MSYS2's ``bin`` directory. Passed through as
+    #: ``WEASYPRINT_DLL_DIRECTORIES``; unset means the platform default.
+    weasyprint_dll_directories: str | None = None
+
     #: Directory names pruned during the surface scan. `.git` holds packed
     #: objects that are not deployed artefacts and would consume the file cap
     #: before a single source file were offered for approval.

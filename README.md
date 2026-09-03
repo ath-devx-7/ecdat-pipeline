@@ -37,7 +37,7 @@ Built one step at a time per `BUILD_PLAN.md`.
 | 11 | Code and binary collectors — Semgrep, pyelftools | done |
 | 12 | CBOM import and CycloneDX 1.6 export | done |
 | 13 | React dashboard — six screens | done |
-| 14 | PDF report | not started |
+| 14 | PDF report | done |
 
 ## Demo environment
 
@@ -67,6 +67,13 @@ export ECDAT_DATABASE_URL="postgresql+psycopg://ecdat:ecdat@localhost:5432/ecdat
 alembic upgrade head
 pytest
 ```
+
+The PDF report needs WeasyPrint's native libraries — Pango, GObject and HarfBuzz — which
+`pip` does not install. On Linux they come from the distribution (`libpango-1.0-0`,
+`libpangoft2-1.0-0`); on Windows from the GTK3 runtime or MSYS2
+(`pacman -S mingw-w64-ucrt-x86_64-pango`), with `ECDAT_WEASYPRINT_DLL_DIRECTORIES` pointing
+at the `bin` directory holding them if it is not on the loader path. When they are missing
+the endpoint answers 503 with that explanation, and `report.html` still serves the report.
 
 All settings are environment variables prefixed `ECDAT_` (see `backend/app/config.py`);
 a `backend/.env` file is picked up if present. The migration also runs against SQLite
@@ -113,6 +120,7 @@ Everything the dashboard shows is a query over the analysis tables, computed on 
 | `POST /api/scans/{id}/rescore` | `{"z_years": N}` — re-scores the scan against a different quantum-computer arrival assumption. The Z slider. |
 | `POST /api/scans/{id}/cbom` | Imports another tool's CycloneDX 1.6 CBOM, stored byte for byte as provenance. |
 | `GET /api/scans/{id}/cbom` | This scan as a CycloneDX 1.6 document, validated before it is served. |
+| `GET /api/scans/{id}/report.pdf` | The report: scan and policy, executive summary, findings by wave, drift, blocked prerequisites, unknown findings, methodology with every standard cited. `report.html` is the same document before WeasyPrint renders it. |
 
 The surface scan records path and size only — no file is opened until its path has been
 approved. `folder` sources are read where they live; `github` and `docker_image` sources

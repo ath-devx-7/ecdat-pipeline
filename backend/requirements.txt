@@ -29,6 +29,12 @@ pyelftools>=0.31
 # against before it is served.
 cyclonedx-python-lib[validation]>=11.0
 
+# Step 14 - PDF report. WeasyPrint renders the Jinja2 HTML template; it needs
+# Pango and GObject installed on the host (see README), and the endpoint answers
+# 503 with the reason rather than a stack trace when they are missing.
+jinja2>=3.1
+weasyprint>=62
+
 # Step 7 - network probe. Imported as a library, not shelled out to: SPEC.md 7.5
 # wants typed ServerScanResult objects rather than a JSON round-trip. Pulls in
 # nassl, which pins cryptography below the newest release.
