@@ -14,12 +14,34 @@ from sqlalchemy.orm import Session, sessionmaker
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 SHIPPED_POLICY_DIR = BACKEND_ROOT / "policy"
+DEMO_DIR = BACKEND_ROOT.parent / "demo"
+TEST_DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 @pytest.fixture(scope="session")
 def shipped_policy_dir() -> Path:
     """The real ``backend/policy/`` pack, as it will ship."""
     return SHIPPED_POLICY_DIR
+
+
+@pytest.fixture(scope="session")
+def demo_dir() -> Path:
+    """The demo environment (build step 3), which is also a scan target."""
+    return DEMO_DIR
+
+
+@pytest.fixture(scope="session")
+def weak_cert_pem() -> bytes:
+    """The demo's RSA-1024 / SHA-1 self-signed certificate.
+
+    Read from ``demo/certs/`` when the demo environment has been generated, and
+    from the committed copy otherwise — see ``tests/data/README.md``. Both are the
+    same bytes; the fallback exists so a fresh clone with no OpenSSL still runs
+    the certificate assertions rather than skipping them.
+    """
+    generated = DEMO_DIR / "certs" / "weak.crt"
+    source = generated if generated.is_file() else TEST_DATA_DIR / "weak-rsa1024-sha1.crt"
+    return source.read_bytes()
 
 
 @pytest.fixture
@@ -112,5 +134,39 @@ def source_folder(tmp_path: Path):
             target = root if index % 2 == 0 else root / "nested"
             (target / f"file_{index:03d}.txt").write_text(f"file {index}\n", encoding="utf-8")
         return root
+
+    return _factory
+
+
+@pytest.fixture
+def scan_context(tmp_path: Path):
+    """Build a :class:`ScanContext` over a throwaway tree.
+
+    ``files`` maps relative path to contents (``str`` or ``bytes``); ``approved``
+    defaults to every one of them. Passing a shorter ``approved`` list is how the
+    scope tests express "this file exists but was not approved".
+    """
+    from uuid import uuid4
+
+    from app.collectors.base import ScanContext
+
+    def _factory(files: dict[str, object], approved: list[str] | None = None, **kwargs):
+        root = tmp_path / "work"
+        root.mkdir(exist_ok=True)
+        for relative, content in files.items():
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, bytes):
+                target.write_bytes(content)
+            else:
+                # LF endings so a file's byte size is the same on every
+                # platform: the certificate collector reports it verbatim.
+                target.write_text(str(content), encoding="utf-8", newline="\n")
+        return ScanContext.build(
+            scan_id=uuid4(),
+            work_dir=root,
+            approved_paths=list(files) if approved is None else approved,
+            **kwargs,
+        )
 
     return _factory

@@ -14,11 +14,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.models.enums import ScanMode, ScanStatus, SourceType
+from app.models.enums import CollectorName, ScanMode, ScanStatus, SourceType
 
 __all__ = [
     "ApproveRequest",
     "ApproveResponse",
+    "CollectorRunSummary",
     "DirectoryNode",
     "FileNode",
     "FileTreeResponse",
@@ -158,11 +159,32 @@ class ApproveRequest(BaseModel):
     paths: list[str] = Field(default_factory=list)
 
 
+class CollectorRunSummary(BaseModel):
+    """One collector's contribution to a run.
+
+    Reported per collector rather than as a single total so a ``partial`` scan
+    says *which* collector fell over. "Some findings are missing" is not an
+    actionable statement; "the config collector died after 0.4s" is.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: CollectorName
+    finding_count: int
+    duration_seconds: float
+    error: str | None = None
+
+
 class ApproveResponse(BaseModel):
     scan_id: UUID
     status: ScanStatus
     approved_count: int
     file_count: int
+    #: Raw collector output. These are not ``findings`` rows yet — the normalizer
+    #: (§8, build step 5) is what writes them to the database, so until then the
+    #: count is the only place a run's output is visible.
+    finding_count: int = 0
+    collectors: list[CollectorRunSummary] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

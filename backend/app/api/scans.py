@@ -6,18 +6,19 @@ Three endpoints, one lifecycle:
 ``GET  /api/scans/{id}/files``      the tree the user picks from
 ``POST /api/scans/{id}/approve``    the permission gate          → running
 
-Scans run synchronously (§2), so ``POST /api/scans`` blocks through staging and
-enumeration. That is a deliberate prototype simplification, guarded by the file
-cap and the probe-target cap enforced here.
+Scans run synchronously (§2), so both ``POST`` endpoints block: creation through
+staging and enumeration, approval through the collector run. That is a deliberate
+prototype simplification, guarded by the file cap, the probe-target cap and the
+per-collector timeout enforced here and in ``app/runner.py``.
 
-Build step 2 stops at approval: the collectors, normalizer and analysis stages
-are steps 4 onwards, so an approved scan is marked ``complete`` immediately.
+Build step 4 runs the certificate and config collectors on approval. Their output
+is returned as counts and goes no further: writing ``findings`` rows is the
+normalizer's job in step 5.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -32,9 +33,11 @@ from app.intake.stage import StagingError, stage_source
 from app.intake.surface import FileCapExceeded, walk_surface
 from app.models.enums import ScanMode, ScanStatus
 from app.models.scan import Scan, ScanFile
+from app.runner import run_scan
 from app.schemas.scans import (
     ApproveRequest,
     ApproveResponse,
+    CollectorRunSummary,
     FileTreeResponse,
     ScanCreate,
     ScanResponse,
@@ -87,10 +90,15 @@ def create_scan(
 
     if payload.mode is ScanMode.PROBE_ONLY:
         # Nothing to stage and nothing to approve: the scope is the probe target
-        # list the user already gave us. Straight to running (§4).
-        scan.status = ScanStatus.RUNNING
-        session.flush()
-        logger.info("scan %s created in probe_only mode, %d target(s)", scan.id, len(scan.probe_targets or []))
+        # list the user already gave us, so the run starts here (§4). Until the
+        # network prober lands in step 7 it has no collectors to run, and a scan
+        # that runs nothing completes rather than hanging in `running`.
+        logger.info(
+            "scan %s created in probe_only mode, %d target(s)",
+            scan.id,
+            len(scan.probe_targets or []),
+        )
+        run_scan(session, scan, settings)
         return scan
 
     try:
@@ -161,8 +169,14 @@ def approve_scan_files(
     scan_id: UUID,
     payload: ApproveRequest,
     session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> ApproveResponse:
-    """The permission gate. Only these paths are ever opened by a collector."""
+    """The permission gate, and the run it releases.
+
+    Only the paths approved here are ever opened by a collector, and this call
+    blocks until every collector has finished (§2). A collector that fails costs
+    its own findings and nothing else: the scan comes back ``partial`` naming it.
+    """
     scan = _load_scan(session, scan_id)
 
     if scan.mode is ScanMode.PROBE_ONLY:
@@ -182,18 +196,16 @@ def approve_scan_files(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     scan.approved_count = approved
-    scan.status = ScanStatus.RUNNING
-
-    # Build step 2 has no collectors yet, so the run is empty and finishes here.
-    # Step 4 replaces this with the ScanRunner over the approved paths.
-    scan.status = ScanStatus.COMPLETE
-    scan.completed_at = datetime.now(timezone.utc)
     session.flush()
-
     logger.info("scan %s approved %d of %d file(s)", scan.id, approved, scan.file_count)
+
+    result = run_scan(session, scan, settings)
+
     return ApproveResponse(
         scan_id=scan.id,
         status=scan.status,
         approved_count=scan.approved_count,
         file_count=scan.file_count,
+        finding_count=len(result.findings),
+        collectors=[CollectorRunSummary.model_validate(run) for run in result.runs],
     )

@@ -148,7 +148,11 @@ def test_probe_only_creates_a_scan_with_no_scan_files(client, db_session) -> Non
 
     assert response.status_code == 201, response.text
     scan = response.json()
-    assert scan["status"] == "running"
+    # probe_only skips staging and approval entirely (§4), so the run starts and
+    # finishes inside this one request. It completes rather than hanging in
+    # `running` because the network prober is not registered until step 7 — at
+    # which point this scan does real work and the status still lands here.
+    assert scan["status"] == "complete"
     assert scan["source_type"] == "none"
     assert scan["file_count"] == 0
     assert scan["probe_targets"] == [{"host": "localhost", "port": 8443}]

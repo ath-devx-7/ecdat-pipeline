@@ -11,3 +11,8 @@ pytest>=8.2
 fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
+
+# Step 4 — certificate and config collectors. crossplane parses nginx.conf as
+# nginx itself does; SPEC.md 7.4 rules out doing it with regex.
+cryptography>=42.0
+crossplane>=0.5.8

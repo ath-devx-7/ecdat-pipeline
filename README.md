@@ -27,7 +27,8 @@ Built one step at a time per `BUILD_PLAN.md`.
 | 1 | DB schema, Alembic, policy loader | done |
 | 2 | Intake — staging, surface scan, approval gate | done |
 | 3 | Demo environment — targets to scan | done |
-| 4–14 | collectors, analysis, UI, reports | not started |
+| 4 | Certificate and config collectors | done |
+| 5–14 | normalizer, analysis, remaining collectors, UI, reports | not started |
 
 ## Demo environment
 
@@ -78,9 +79,9 @@ validation stops the process there rather than answering with uncited verdicts l
 
 | Endpoint | Does |
 |---|---|
-| `POST /api/scans` | Creates the scan, stamps the policy version, stages the source and enumerates it. Ends `awaiting_approval` — or `running` for `probe_only`, which stages nothing. |
+| `POST /api/scans` | Creates the scan, stamps the policy version, stages the source and enumerates it. Ends `awaiting_approval` — `probe_only` stages nothing and runs immediately. |
 | `GET /api/scans/{id}/files` | The surface scan as a nested tree, with per-directory file counts and sizes for the checkbox UI. |
-| `POST /api/scans/{id}/approve` | The permission gate. Approval is set to *exactly* the submitted path list, so nothing stays in scope silently. |
+| `POST /api/scans/{id}/approve` | The permission gate, and the run it releases. Approval is set to *exactly* the submitted path list, so nothing stays in scope silently. Blocks until every collector has finished, then returns `complete` or `partial` with a per-collector breakdown. |
 
 ```bash
 curl -X POST localhost:8000/api/scans -H 'content-type: application/json'   -d '{"mode":"files","source_type":"folder","source_ref":"/srv/app","data_lifetime_years":20}'
@@ -94,6 +95,39 @@ are staged under `ECDAT_WORK_ROOT/{scan_id}`, image layers merged in manifest or
 whiteouts skipped. `.git` is pruned from the walk (`ECDAT_SURFACE_EXCLUDE_DIRS`): packed
 objects are not deployed artefacts and would consume the file cap before a single source
 file reached the approval screen.
+
+## Collectors
+
+Six in the finished system (`SPEC.md` §7); two built so far, and both read only what
+approval put in scope.
+
+| Collector | Reads | `source_layer` |
+|---|---|---|
+| `certs` | `.pem .crt .cer .der` by extension, plus any file containing a `BEGIN CERTIFICATE` block | `artifact` |
+| `config` | `openssl.cnf`, `nginx.conf`, `sshd_config`, `java.security`, matched by name anywhere in the tree | `config` |
+
+Three properties are worth stating because they are enforced in one place rather than
+trusted to each collector:
+
+- **Private key material is never parsed.** A file matching `BEGIN * PRIVATE KEY` yields
+  path, size and POSIX permissions, and the read stops at that header line — so a bundle
+  holding a certificate above its key still reports the certificate without the key's
+  bytes ever entering the process. `.p12`/`.pfx` containers are never opened at all.
+  No module in the codebase calls a private key loader.
+- **An unapproved path is never opened.** `ScanContext.iter_files()` is the only way a
+  collector reaches the filesystem, and nginx `include` directives are deliberately not
+  followed for the same reason.
+- **A collector that fails costs its own findings and nothing else.** The scan comes back
+  `partial` naming the collector that died, rather than failing whole or — worse —
+  reporting `complete` over a hole.
+
+`source_layer` is the distinction the drift check (§9) runs on: `config` findings are
+*claims* about what a service will negotiate, and `confidence: high` on one means "the
+declaration was read correctly", never "the declaration is true". Verdicts are not a
+collector's business — those come from the policy pack in step 6, against a citation.
+
+Collector output does not reach the `findings` table yet; the normalizer (step 5) is what
+writes it. Until then `POST /api/scans/{id}/approve` returns the counts.
 
 ## Policy pack
 
