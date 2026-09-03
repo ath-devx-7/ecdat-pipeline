@@ -212,4 +212,5 @@ def approve_scan_files(
         verdict_counts=result.verdict_counts,
         alignment=result.alignment.as_dict() if result.alignment else {},
         wave_counts=result.wave_counts,
+        recommendation_counts=result.recommendation_counts,
     )

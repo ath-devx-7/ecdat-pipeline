@@ -52,3 +52,6 @@ groups:
   # explicitly and the one a TLS 1.3 client with OpenSSL 3.5 negotiates today.
   4587: SecP256r1MLKEM768
   4588: X25519MLKEM768
+  # 4589 (0x11ED) is the parameter-set upgrade `pqc_targets.yaml` selects for
+  # long-lived data: ML-KEM-1024 hybridised with P-384 (draft-ietf-tls-ecdhe-mlkem).
+  4589: SecP384r1MLKEM1024

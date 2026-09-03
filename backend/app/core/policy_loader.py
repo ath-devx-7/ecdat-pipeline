@@ -36,6 +36,7 @@ __all__ = [
     "PolicyPack",
     "PolicyValidationError",
     "PolicyVersion",
+    "PqcParameterSet",
     "PqcTarget",
     "get_policy",
     "load_policy",
@@ -140,6 +141,25 @@ class PqcTarget:
     action_class: str | None = None
     side_effects: str | None = None
     note: str | None = None
+    #: §11 ``no_path``: an entry with no ``target`` names what to do instead —
+    #: isolation, tunnelling, replacement. The advisor never invents one.
+    compensating_control: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PqcParameterSet:
+    """One ``parameter_sets`` entry from ``pqc_targets.yaml`` (§11 step 2).
+
+    ``replace`` maps a target name to the parameter set that applies when
+    ``match`` holds for the scan — ``ML-KEM-768`` to ``ML-KEM-1024`` above a
+    data-lifetime threshold. The threshold is policy because it is guidance,
+    not arithmetic.
+    """
+
+    id: str
+    source: str
+    match: Mapping[str, Any] = field(default=_EMPTY_MAP)
+    replace: Mapping[str, str] = field(default=_EMPTY_MAP)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +173,7 @@ class PolicyPack:
     aliases: Mapping[str, Any]
     named_groups: Mapping[str, Any]
     policy_dir: Path
+    parameter_sets: tuple[PqcParameterSet, ...] = ()
 
     def algorithm(self, rule_id: str) -> AlgorithmRule | None:
         return next((r for r in self.algorithms if r.id == rule_id), None)
@@ -273,7 +294,9 @@ def _load_algorithms(policy_dir: Path) -> tuple[AlgorithmRule, ...]:
     return tuple(rules)
 
 
-def _load_pqc_targets(policy_dir: Path) -> tuple[bool, tuple[PqcTarget, ...]]:
+def _load_pqc_targets(
+    policy_dir: Path,
+) -> tuple[bool, tuple[PqcTarget, ...], tuple[PqcParameterSet, ...]]:
     raw = _read_yaml(policy_dir / PQC_TARGETS_FILE)
     prefer_hybrid = bool(raw.get("prefer_hybrid", False))
     entries = raw.get("targets") or []
@@ -304,9 +327,47 @@ def _load_pqc_targets(policy_dir: Path) -> tuple[bool, tuple[PqcTarget, ...]]:
                 action_class=entry.get("action_class"),
                 side_effects=entry.get("side_effects"),
                 note=entry.get("note"),
+                compensating_control=entry.get("compensating_control"),
             )
         )
-    return prefer_hybrid, tuple(targets)
+    return prefer_hybrid, tuple(targets), _load_parameter_sets(raw)
+
+
+def _load_parameter_sets(raw: Mapping[str, Any]) -> tuple[PqcParameterSet, ...]:
+    """The ``parameter_sets`` block. Optional, but cited like everything else."""
+    entries = raw.get("parameter_sets") or []
+    if not isinstance(entries, list):
+        raise PolicyValidationError(f"{PQC_TARGETS_FILE}: 'parameter_sets' must be a list")
+
+    sets: list[PqcParameterSet] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            raise PolicyValidationError(
+                f"{PQC_TARGETS_FILE}: parameter_sets entry at index {index} is not a mapping"
+            )
+        source = _require_source(entry, PQC_TARGETS_FILE, index)
+        entry_id = _require_id(entry, PQC_TARGETS_FILE, index)
+        if entry_id in seen:
+            raise PolicyValidationError(
+                f"{PQC_TARGETS_FILE}: duplicate parameter_sets id '{entry_id}'"
+            )
+        seen.add(entry_id)
+        replace = entry.get("replace") or {}
+        if not isinstance(replace, Mapping):
+            raise PolicyValidationError(
+                f"{PQC_TARGETS_FILE}: parameter_sets entry '{entry_id}': 'replace' must be "
+                "a mapping of target name to parameter set"
+            )
+        sets.append(
+            PqcParameterSet(
+                id=entry_id,
+                source=source,
+                match=_freeze(entry.get("match") or {}),
+                replace=_freeze({str(k): str(v) for k, v in replace.items()}),
+            )
+        )
+    return tuple(sets)
 
 
 def _load_mapping_file(policy_dir: Path, filename: str, key: str) -> Mapping[str, Any]:
@@ -331,7 +392,7 @@ def load_policy(policy_dir: Path | str | None = None) -> PolicyPack:
     if not directory.is_dir():
         raise PolicyError(f"Policy directory not found: {directory}")
 
-    prefer_hybrid, pqc_targets = _load_pqc_targets(directory)
+    prefer_hybrid, pqc_targets, parameter_sets = _load_pqc_targets(directory)
     return PolicyPack(
         version=_load_version(directory),
         algorithms=_load_algorithms(directory),
@@ -340,6 +401,7 @@ def load_policy(policy_dir: Path | str | None = None) -> PolicyPack:
         aliases=_load_mapping_file(directory, ALIASES_FILE, "aliases"),
         named_groups=_load_mapping_file(directory, NAMED_GROUPS_FILE, "groups"),
         policy_dir=directory,
+        parameter_sets=parameter_sets,
     )
 
 

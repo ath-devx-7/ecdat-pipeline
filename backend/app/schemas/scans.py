@@ -198,6 +198,10 @@ class ApproveResponse(BaseModel):
     #: that need no migration at all — a quantum_safe or hygiene verdict gets no
     #: wave rather than a reassuring one.
     wave_counts: dict[str, int] = Field(default_factory=dict)
+    #: Recommendations by status (§11). All four keys are always present:
+    #: ``blocked``, ``no_path`` and ``unknown`` are the hard part of a migration,
+    #: and a dashboard that shows only ``recommended`` hides it.
+    recommendation_counts: dict[str, int] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #

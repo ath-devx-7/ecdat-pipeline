@@ -4,6 +4,22 @@
 #
 # Every entry MUST carry a `source` citation.
 prefer_hybrid: true
+
+# §11 step 2 — parameter-set selection from the scan's data_lifetime_years.
+# Read by the advisor after a target matches and before feasibility is checked.
+# The threshold is policy, not code: where the line between "category 3 is
+# enough" and "use the largest parameter set" sits is national guidance, and
+# it differs. The 10-year line is the same one `sig-longlived-root` draws, so
+# the pack has one notion of long-lived rather than two.
+parameter_sets:
+  - id: longlived-max-parameter-set
+    match: { asset_lifetime_gt: 10 }
+    replace:
+      ML-KEM-768: ML-KEM-1024
+      ML-DSA-65: ML-DSA-87
+      X25519MLKEM768: SecP384r1MLKEM1024
+    source: "CNSA 2.0 (NSA, Sept 2022) for ML-KEM-1024 and ML-DSA-87; draft-ietf-tls-ecdhe-mlkem for SecP384r1MLKEM1024"
+
 targets:
   - id: kex-to-mlkem
     match: { primitive: key_exchange, family: [RSA, ECDH, DH] }

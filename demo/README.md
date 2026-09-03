@@ -301,20 +301,57 @@ history is a real incident even when the key is a toy.
 ### F — `oldssl`, the blocked-recommendation target (`oldssl/`)
 
 Ubuntu 20.04, OpenSSL 1.1.1f. Produces no findings of its own from a file scan; its
-job is to be the reason the advisor cannot recommend anything yet:
+job is to be the reason the advisor cannot recommend anything yet. For the key
+exchange the probe sees on 8443, with `data_lifetime_years` at or under the pack's
+10-year line:
 
 ```json
-{"status": "blocked", "target": "ML-KEM-768",
- "prerequisites": [{"unmet": "openssl>=3.5", "observed": "openssl 1.1.1"},
-                   {"unmet": "TLS 1.3",      "observed": "TLS 1.2"}]}
+{"status": "blocked", "target": "X25519MLKEM768", "hybrid_target": "X25519MLKEM768",
+ "prerequisites": [{"unmet": "openssl>=3.5", "observed": "openssl 1.1.1f",
+                    "observed_at": "cbin/build/cryptodemo"},
+                   {"unmet": "TLS 1.3",      "observed": "TLS 1.2",
+                    "observed_at": "localhost:8443"}]}
 ```
 
 Both halves of that chain come from real observations: the OpenSSL version from the
-binary collector's `DT_NEEDED` on `cbin`, the protocol ceiling from the probe of 8443.
+binary collector's `OPENSSL_VERSION_TEXT` string on `cbin`, the protocol ceiling from
+the probe of 8443. The chain is ordered with the procurement item first.
+
+**Which observation counts for which asset** (§11 step 3). The protocol ceiling is
+never borrowed: what 8444 negotiates says nothing about 8443. A library version *is*
+borrowed from elsewhere in the same scan when the asset shows none of its own — the
+file tree is one deployment — and the entry names where it was seen. Where several are
+seen, the lowest is the one reported, so borrowed evidence can block a target but can
+never confirm one. A prerequisite nothing observed at all stays in the chain with
+`"observed": null`; the work item is to confirm it. Rounding an unobserved
+prerequisite to "presumably fine" is the optimistic direction this file rules out
+below, and a target recommended on that basis is the wrong recommendation §11 says is
+worse than none.
+
+Until the binary collector lands (build step 11), a scan of this tree has no library
+observation, so the first entry reads `"observed": null` and the second is exactly as
+above. The target follows the data lifetime (§11 step 2): above 10 years the pack's
+`parameter_sets` block moves it to `SecP384r1MLKEM1024`, the P-384 hybrid of
+ML-KEM-1024. With `prefer_hybrid: false` the same rows carry `ML-KEM-768` and
+`ML-KEM-1024`, with the hybrid still recorded as `hybrid_target`.
 
 This output is worth more than the recommendation it replaces. "Adopt ML-KEM" is a
 wish. "Upgrade OpenSSL, then enable TLS 1.3, then adopt ML-KEM" is a work plan, and it
 surfaces the item with the procurement lead time first.
+
+**What a `files` scan of `demo/` recommends at X=20**, against the shipped pack:
+
+| Status | Members | Why |
+|---|---|---|
+| `recommended` | every certificate and `ssh-rsa` / `ecdsa-sha2-nistp256` signature → `SLH-DSA-SHA2-128s`; `hmac-md5` → `SHA-256` | At X=20 both signature rules match. ML-DSA needs an OpenSSL nothing in the tree has observed, so it is not feasible now; SLH-DSA needs nothing, and feasible beats theoretically better. Observe OpenSSL ≥ 3.5 and ML-DSA-87 wins instead — it is the cheaper action, and SLH-DSA's own note calls it a fallback |
+| `blocked` | the three `sshd_config` key exchanges → `SecP384r1MLKEM1024` | `kex-to-mlkem` requires TLS 1.3 and OpenSSL ≥ 3.5; the file shows neither. See the gaps table for why a TLS rule fires on an SSH line at all |
+| `unknown` | `TLSv1` and `TLSv1.1` declared in `weak-nginx/nginx.conf` | `broken_now`, and no `pqc_targets.yaml` entry covers a protocol. No target is emitted rather than a generic one |
+| `no_path` | none | Emitted only when a pack entry declares a `compensating_control` instead of a `target`. The shipped pack has none — see the gaps table |
+
+Only `broken_now` and `quantum_vulnerable` findings get a row. An `unknown` verdict
+means the pack could not say whether the algorithm is a problem, and recommending a
+replacement for it would be advising a migration nothing has established is needed;
+those findings sit in the `verify` wave where the action is confirmation.
 
 ### G — `cbin`, the compiled binary (`cbin/`, built to `cbin/build/cryptodemo`)
 
@@ -424,6 +461,8 @@ papering over:
 | Weak TLS 1.2 cipher suites | The pack rules on protocol versions, not on suites |
 | Every hygiene observation — `ssl_prefer_server_ciphers off`, world-readable key files, self-signed and expiring certificates, hardcoded key material | The pack rules on algorithms. These are not algorithms, so nothing in it matches them and the `hygiene` verdict has no members yet |
 | ChaCha20 | The pack's `quantum_safe` entries cite NIST documents, which do not cover a cipher NIST has not approved. A citation for it would have to come from somewhere else |
+| `no_path` recommendations | A `no_path` row comes from a `pqc_targets.yaml` entry that declares a `compensating_control` (isolation, tunnelling, replacement) instead of a `target`. The shipped pack has no such entry, so the status has no members — which is honest: nothing in the demo has been shown to have no upgrade path, and the advisor does not decide that on its own |
+| SSH key exchange held to a TLS prerequisite | `kex-to-mlkem` is written for TLS — its `requires` names a TLS 1.3 ceiling — but its `match` is on primitive and family, so it also fires on `diffie-hellman-group14-sha1` in `sshd_config`, where the TLS clause can never be observed. The row is `blocked` with `"observed": null`, which is not wrong but is not the right work plan either. The fix is a cited SSH entry (OpenSSH's `mlkem768x25519-sha256`, RFC 9370 for the hybrid method), matched on the SSH observation, not a special case in the advisor |
 | Cipher-suite preference, and hybrid PQC group support | Not a pack gap but a **tool** gap, and the collector says so out loud. sslyze 6.3.1 reports accepted and rejected suites but not whether the server enforces its own ordering, and it enumerates groups from nassl's `OpenSslEcNidEnum` — classical curves only, so `X25519MLKEM768` is never offered and its absence proves nothing. Both produce an explicit `confidence: low` finding rather than silence: a readiness percentage that counts *not measured* as *not present* is a number nobody should act on |
 
 Two gaps that were **not** left open, because they were omissions rather than

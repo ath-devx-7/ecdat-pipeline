@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from app.config import Settings, get_settings
+from app.core.advisor import validate_targets
 from app.core.normalizer import get_alias_index
 from app.core.policy import validate_rules
 from app.core.policy_loader import PolicyPack, get_policy
@@ -30,15 +31,20 @@ def initialise() -> tuple[Settings, PolicyPack]:
     # A condition key the engine does not implement would not fail — it would
     # widen its rule to every finding of that family. Caught here, once.
     validate_rules(policy)
+    # Same failure mode on the advisor's side: a `requires` clause the advisor
+    # cannot test would not block, it would be skipped — and a prerequisite
+    # skipped is a recommendation rounded in the optimistic direction (§11).
+    validate_targets(policy)
 
     logger.info(
         "policy pack %s loaded from %s (published %s, %d algorithm rules, %d PQC targets, "
-        "%d alias entries over %d spellings)",
+        "%d parameter-set rules, %d alias entries over %d spellings)",
         policy.version.version,
         policy.policy_dir,
         policy.version.published.isoformat(),
         len(policy.algorithms),
         len(policy.pqc_targets),
+        len(policy.parameter_sets),
         len(aliases.entries),
         len(aliases.by_name),
     )
