@@ -26,7 +26,22 @@ Built one step at a time per `BUILD_PLAN.md`.
 |---|---|---|
 | 1 | DB schema, Alembic, policy loader | done |
 | 2 | Intake — staging, surface scan, approval gate | done |
-| 3–14 | demo env, collectors, analysis, UI, reports | not started |
+| 3 | Demo environment — targets to scan | done |
+| 4–14 | collectors, analysis, UI, reports | not started |
+
+## Demo environment
+
+`demo/` holds the deliberately weak targets everything from step 4 onwards is tested
+against — you cannot test a certificate parser without a bad certificate, or a drift
+check without a server that contradicts its own config.
+
+```bash
+./demo/gen_certs.sh                                  # certificates only
+docker compose -f demo/docker-compose.yml up --build # the full lab
+```
+
+`demo/README.md` lists the finding every target is expected to produce, and — as much
+to the point — what must **not** be flagged. Later steps test against that document.
 
 ## Backend — local setup
 

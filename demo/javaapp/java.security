@@ -1,0 +1,26 @@
+# Overriding security properties for the settlement service — ECDAT demo
+# target D (SPEC.md §14, config parser §7.4).
+#
+# This is the JDK 8-era default set, carried forward onto a JDK 17 runtime by an
+# operator who hit a handshake failure against an old partner and made it go
+# away. It is a *declaration about crypto* and belongs to `source_layer: config`
+# — a claim about what this JVM will refuse, not an observation of what it did.
+#
+# Loaded with `-Djava.security.properties=` (single `=`, which overrides these
+# properties and leaves the rest of the JDK's file intact), so it is live
+# configuration rather than a decorative file.
+#
+# What it permits, by omission, is the finding:
+#   * TLSv1 and TLSv1.1 are absent from the disabled list — RFC 8996 says both
+#     must go. JDK 17 disables them by default; this file re-enables them.
+#   * SHA-1 signatures are absent — accepted in certificate chains.
+#   * The RSA floor is 1024 bits, not 2048.
+
+# ECDAT-EXPECT: config-java-tls-disabled
+jdk.tls.disabledAlgorithms=SSLv3, RC4, DES, MD5withRSA, \
+    DH keySize < 1024, EC keySize < 224, \
+    include jdk.disabled.namedCurves
+
+# ECDAT-EXPECT: config-java-certpath-disabled
+jdk.certpath.disabledAlgorithms=MD2, MD5, RSA keySize < 1024, \
+    DSA keySize < 1024, EC keySize < 224

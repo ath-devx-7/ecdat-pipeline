@@ -1,0 +1,5 @@
+# Pinned to 42.x on purpose. cryptography 43 moved TripleDES and ARC4 into
+# `cryptography.hazmat.decrepit`, so the deliberately-weak 3DES call in app.py
+# would stop importing on a newer release. A service pinned to an old release
+# to keep a deprecated algorithm working is itself the situation ECDAT reports.
+cryptography==42.0.8

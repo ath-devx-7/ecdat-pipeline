@@ -1,0 +1,31 @@
+# OpenSSL library configuration for the modern TLS host — ECDAT demo target B.
+#
+# The same hardening as ../weak-nginx/openssl.cnf, with the one line that makes
+# it real: `openssl_conf` below names the section chain, so OpenSSL applies it
+# at library init. Diffing the two files is the shortest explanation of the
+# drift demo anyone will get.
+#
+# Every declaration here agrees with what the server negotiates, so the
+# alignment check produces no note for this host.
+
+openssl_conf = default_conf
+
+[ default_conf ]
+ssl_conf = ssl_sect
+
+[ ssl_sect ]
+system_default = system_default_sect
+
+[ system_default_sect ]
+# Declared floor and ceiling both TLS 1.3 — matching `ssl_protocols TLSv1.3`.
+MinProtocol = TLSv1.3
+MaxProtocol = TLSv1.3
+
+# Declared TLS 1.3 suite list, identical to the `ssl_conf_command Ciphersuites`
+# line in nginx.conf.
+Ciphersuites = TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+
+# Governs TLS 1.2 and below, which this host does not offer. Kept so the
+# openssl.cnf parser (§7.4) has all four of its keys represented across the
+# demo, and set to the level a 2048-bit floor requires.
+CipherString = DEFAULT@SECLEVEL=2

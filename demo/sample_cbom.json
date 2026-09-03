@@ -1,0 +1,305 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:6f1a0f3e-2c47-4f8a-9c0d-8b7d5e1a4c92",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-08-28T09:14:03Z",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "group": "org.pqca",
+          "name": "cbomkit",
+          "version": "1.4.0",
+          "description": "Stand-in for a third-party CBOM producer. ECDAT imports this rather than competing with it (SPEC.md 7.6 and 18)."
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:generic/ecdat-demo@0.1.0",
+      "name": "ecdat-demo",
+      "version": "0.1.0"
+    }
+  },
+  "components": [
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/md5@1.2.840.113549.2.5",
+      "name": "MD5",
+      "description": "Import fixture: the same MD5 use the code collector finds natively. Both must collapse to one algorithm identity in the normalizer (SPEC.md 8), not two dashboard rows.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "128",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["digest"],
+          "classicalSecurityLevel": 0,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.2.5"
+      },
+      "evidence": {
+        "occurrences": [
+          { "location": "pyapp/app.py", "line": 49, "symbol": "customer_fingerprint" },
+          { "location": "javaapp/HashDemo.java", "line": 29, "symbol": "recordFingerprint" }
+        ]
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha-1@1.3.14.3.2.26",
+      "name": "SHA-1",
+      "description": "Spelled SHA-1 here, sha1 by Semgrep, SHA1WithRSA by the certificate parser and 1.3.14.3.2.26 by OID. Identity resolution has to collapse all four onto one entry.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "160",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["digest"],
+          "classicalSecurityLevel": 0,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.3.14.3.2.26"
+      },
+      "evidence": {
+        "occurrences": [
+          { "location": "pyapp/app.py", "line": 54, "symbol": "statement_checksum" },
+          { "location": "cbin/cryptodemo.c", "line": 75, "symbol": "EVP_sha1" }
+        ]
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha1-with-rsa@1.2.840.113549.1.1.5",
+      "name": "SHA1withRSA",
+      "description": "Certificate signature algorithm. A signature primitive, so the risk scorer leaves urgency_years null and routes it to wave_3 while the verdict on the SHA-1 half stays broken_now.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "1024",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["sign", "verify"],
+          "classicalSecurityLevel": 80,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.1.1.5"
+      },
+      "evidence": {
+        "occurrences": [{ "location": "certs/weak.crt" }]
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/rsa-1024@1.2.840.113549.1.1.1",
+      "name": "RSA-1024",
+      "description": "Below the SP 800-131A Rev.2 floor: broken_now, not merely quantum_vulnerable. The two are independent classifications and must not be collapsed onto one severity scale (SPEC.md 10).",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "parameterSetIdentifier": "1024",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 80,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      },
+      "evidence": {
+        "occurrences": [
+          { "location": "pyapp/app.py", "line": 64, "symbol": "issue_signing_key" },
+          { "location": "cbin/cryptodemo.c", "line": 67, "symbol": "RSA_generate_key_ex" }
+        ]
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-128-ecb@2.16.840.1.101.3.4.1.1",
+      "name": "AES-128-ECB",
+      "description": "AES itself is quantum_safe: Grover halves the effective key length, it does not break the cipher. ECB is what makes this entry broken_now, and the policy rule matches on mode, not on key size.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "parameterSetIdentifier": "128",
+          "mode": "ecb",
+          "padding": "pkcs7",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["encrypt", "decrypt"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.1.1"
+      },
+      "evidence": {
+        "occurrences": [{ "location": "pyapp/app.py", "line": 77, "symbol": "encrypt_invoice" }]
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/x25519@1.3.101.110",
+      "name": "X25519",
+      "description": "Key agreement on the modern host. Hygienically clean and still quantum_vulnerable, and a confidentiality primitive, so Mosca's inequality does apply to it.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "key-agree",
+          "curve": "curve25519",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keygen", "keyderive"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.3.101.110"
+      },
+      "evidence": {
+        "occurrences": [{ "location": "strong-nginx/nginx.conf", "line": 44, "symbol": "ssl_ecdh_curve" }]
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-kem-768@2.16.840.1.101.3.4.4.2",
+      "name": "ML-KEM-768",
+      "description": "An asset that is already migrated. Present so the readiness percentage has a numerator and so quantum_safe is demonstrably reachable, not just a category in the legend.",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "kem",
+          "parameterSetIdentifier": "ML-KEM-768",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keygen", "encapsulate", "decapsulate"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 3
+        },
+        "oid": "2.16.840.1.101.3.4.4.2"
+      },
+      "evidence": {
+        "occurrences": [{ "location": "third-party/gateway/tls_profile.yaml", "line": 12 }]
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/legacy.ecdat.demo",
+      "name": "legacy.ecdat.demo",
+      "description": "The 8443 certificate as an external tool reported it. Carries references rather than repeating algorithm detail, which is why the algorithm components above need stable bom-refs.",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "C=IN, O=ECDAT Demo, CN=legacy.ecdat.demo",
+          "issuerName": "C=IN, O=ECDAT Demo, CN=legacy.ecdat.demo",
+          "notValidBefore": "2026-08-01T00:00:00Z",
+          "notValidAfter": "2028-11-04T00:00:00Z",
+          "signatureAlgorithmRef": "crypto/algorithm/sha1-with-rsa@1.2.840.113549.1.1.5",
+          "subjectPublicKeyRef": "crypto/related-crypto-material/legacy-rsa-1024-public",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      },
+      "evidence": {
+        "occurrences": [{ "location": "certs/weak.crt" }]
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/related-crypto-material/legacy-rsa-1024-public",
+      "name": "legacy.ecdat.demo public key",
+      "description": "Public key material only. The private half is recorded by path, size and permissions and never parsed (SPEC.md 1), which is also why the demo .p12 is treated as key material rather than as a certificate.",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "id": "legacy-rsa-1024",
+          "state": "active",
+          "algorithmRef": "crypto/algorithm/rsa-1024@1.2.840.113549.1.1.1",
+          "size": 1024,
+          "format": "SubjectPublicKeyInfo"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/tls-1.0@legacy.ecdat.demo:8443",
+      "name": "TLS 1.0",
+      "description": "Reported by the external tool as an accepted protocol version on 8443. Imported findings arrive as source_layer source unless the document says otherwise (SPEC.md 7.6), so this is not a live observation and must not feed the alignment check.",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "tls",
+          "version": "1.0",
+          "cipherSuites": [
+            {
+              "name": "TLS_RSA_WITH_AES_128_CBC_SHA",
+              "algorithms": [
+                "crypto/algorithm/rsa-1024@1.2.840.113549.1.1.1",
+                "crypto/algorithm/sha-1@1.3.14.3.2.26"
+              ],
+              "identifiers": ["0x00,0x2F"]
+            },
+            {
+              "name": "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+              "algorithms": ["crypto/algorithm/sha-1@1.3.14.3.2.26"],
+              "identifiers": ["0x00,0x0A"]
+            }
+          ],
+          "cryptoRefArray": ["crypto/certificate/legacy.ecdat.demo"]
+        },
+        "oid": "1.3.18.0.2.32.104"
+      },
+      "evidence": {
+        "occurrences": [{ "location": "legacy.ecdat.demo:8443" }]
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:generic/ecdat-demo@0.1.0",
+      "dependsOn": [
+        "crypto/algorithm/md5@1.2.840.113549.2.5",
+        "crypto/algorithm/sha-1@1.3.14.3.2.26",
+        "crypto/algorithm/rsa-1024@1.2.840.113549.1.1.1",
+        "crypto/algorithm/aes-128-ecb@2.16.840.1.101.3.4.1.1",
+        "crypto/algorithm/x25519@1.3.101.110",
+        "crypto/algorithm/ml-kem-768@2.16.840.1.101.3.4.4.2",
+        "crypto/certificate/legacy.ecdat.demo",
+        "crypto/protocol/tls-1.0@legacy.ecdat.demo:8443"
+      ]
+    },
+    {
+      "ref": "crypto/certificate/legacy.ecdat.demo",
+      "dependsOn": [
+        "crypto/algorithm/sha1-with-rsa@1.2.840.113549.1.1.5",
+        "crypto/related-crypto-material/legacy-rsa-1024-public"
+      ]
+    },
+    {
+      "ref": "crypto/algorithm/sha1-with-rsa@1.2.840.113549.1.1.5",
+      "dependsOn": [
+        "crypto/algorithm/sha-1@1.3.14.3.2.26",
+        "crypto/algorithm/rsa-1024@1.2.840.113549.1.1.1"
+      ]
+    },
+    { "ref": "crypto/algorithm/md5@1.2.840.113549.2.5", "dependsOn": [] },
+    { "ref": "crypto/algorithm/x25519@1.3.101.110", "dependsOn": [] },
+    { "ref": "crypto/algorithm/ml-kem-768@2.16.840.1.101.3.4.4.2", "dependsOn": [] },
+    { "ref": "crypto/algorithm/aes-128-ecb@2.16.840.1.101.3.4.1.1", "dependsOn": [] }
+  ]
+}

@@ -1,0 +1,13 @@
+# Normalise text to LF in the repository regardless of the platform it was
+# authored on.
+* text=auto
+
+# Everything under demo/ is either mounted into a Linux container or COPY'd into
+# one. A CRLF checkout on Windows makes `/bin/sh` fail on the shebang, nginx
+# reject its own configuration, and `make` reject its recipes — failures that
+# only appear on one contributor's machine, which is the worst kind. This tree
+# stays LF everywhere.
+/demo/** text eol=lf
+
+# Shell scripts anywhere are run by a POSIX shell, on the host or in a container.
+*.sh text eol=lf

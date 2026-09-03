@@ -1,0 +1,38 @@
+# SSH daemon configuration — ECDAT demo target H (SPEC.md §7.4).
+#
+# Not one of the eight targets §14 lists, but §7.4 ships an sshd_config parser
+# and a parser with nothing to parse cannot be tested. Kept as a file rather
+# than a running sshd: the parser reads declarations, and nothing in the demo
+# probes SSH, so a live daemon would add attack surface and prove nothing.
+#
+# Everything below is a *declaration*, `source_layer: config`. It is what this
+# host claims it will negotiate, and no part of the demo verifies it — which is
+# the honest position: unlike the TLS hosts, there is no live observation to
+# align it against, so §9 must emit no note for any of it.
+
+Port 22
+Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+
+# ECDAT-EXPECT: config-ssh-ciphers
+# CBC-mode SSH ciphers and 3DES. CBC in SSH is worse than in TLS — the mode
+# interacts with the packet-length field, which is what CVE-2008-5161 exploits.
+Ciphers 3des-cbc,aes128-cbc,aes256-cbc,aes128-ctr,aes256-ctr
+
+# ECDAT-EXPECT: config-ssh-kex
+# group1 is the 1024-bit MODP group, and both group1 and group14 hash with
+# SHA-1. All three are key-exchange primitives, so Mosca applies to them.
+KexAlgorithms diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,ecdh-sha2-nistp256
+
+# ECDAT-EXPECT: config-ssh-macs
+# MD5 and truncated-SHA-1 MACs, in encrypt-and-MAC order.
+MACs hmac-md5,hmac-sha1-96,hmac-sha2-256
+
+# ECDAT-EXPECT: config-ssh-hostkeyalgorithms
+# ssh-rsa is RSA with SHA-1. OpenSSH 8.8 disabled it by default; naming it here
+# turns it back on.
+HostKeyAlgorithms ssh-rsa,ecdsa-sha2-nistp256
+
+PermitRootLogin no
+PasswordAuthentication no

@@ -1,0 +1,38 @@
+# OpenSSL library configuration for the legacy TLS host — ECDAT demo target A.
+#
+# This file is the *claim* half of the drift demo (SPEC.md §9). It states a
+# TLS 1.2 floor. The server it ships with accepts TLS 1.0.
+#
+# Why the claim has no effect: OpenSSL only applies a `system_default` section
+# if a top-level `openssl_conf = <section>` pointer names the chain during
+# library initialisation. That pointer is commented out below. Without it the
+# hardening section is inert text — the file parses, `openssl ciphers` looks
+# right, and nothing is enforced. See ../strong-nginx/openssl.cnf for the same
+# configuration wired up correctly.
+#
+# This is a real and common failure, and it is invisible to every audit method
+# except comparing the declaration against a live handshake.
+#
+# ECDAT does not decide whether this is an oversight or a deliberate exception
+# for one host. §9 rule 4: report that the two differ, and exactly where. The
+# judgement belongs to whoever owns the server.
+
+# openssl_conf = default_conf     <-- absent on purpose; see above.
+
+[ default_conf ]
+ssl_conf = ssl_sect
+
+[ ssl_sect ]
+system_default = system_default_sect
+
+[ system_default_sect ]
+# ECDAT-EXPECT: config-minprotocol-tls12
+# Declared floor: TLS 1.2. Observed on 8443: TLS 1.0. This pair is the
+# alignment note the demo exists to produce.
+MinProtocol = TLSv1.2
+
+# ECDAT-EXPECT: config-maxprotocol-tls12
+# Declared ceiling: TLS 1.2. The server also tops out at TLS 1.2, so this
+# declaration *agrees* with reality and must NOT be flagged. §9 rule 3 —
+# flag the usage sites that diverge, not the whole file.
+MaxProtocol = TLSv1.2
