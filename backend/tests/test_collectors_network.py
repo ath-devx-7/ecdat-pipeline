@@ -21,9 +21,6 @@ nothing modern can be persuaded to speak it.
 
 from __future__ import annotations
 
-import socket
-import ssl
-import threading
 from pathlib import Path
 from uuid import uuid4
 
@@ -42,6 +39,8 @@ from app.collectors.network import (
     declared_targets,
     ensure_allowed,
 )
+from tests.conftest import free_port, reachable
+
 from app.core.policy_loader import load_policy
 from app.models.enums import CollectorName, Confidence, Primitive, SourceLayer, Verdict
 
@@ -57,20 +56,6 @@ def context_for(*targets: tuple[str, int], **kwargs) -> ScanContext:
 
 def named(findings, name: str) -> list:
     return [f for f in findings if f.algorithm_name == name]
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
-def reachable(host: str, port: int, timeout: float = 0.5) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -148,55 +133,6 @@ def test_every_attempt_is_logged(caplog) -> None:
 # --------------------------------------------------------------------------- #
 # Against a real handshake
 # --------------------------------------------------------------------------- #
-
-
-@pytest.fixture(scope="module")
-def local_tls_server(request) -> tuple[str, int]:
-    """A TLS 1.2+ server on a free port, using the demo's own certificate.
-
-    In-process and stdlib-only, so the collector meets a real handshake without
-    Docker. The TLS 1.2 floor is the point: it makes this the same shape as the
-    demo's clean host, which is what "offered and refused" has to be tested on.
-    """
-    certs = Path(__file__).resolve().parent.parent.parent / "demo" / "certs"
-    if not (certs / "strong.crt").is_file():
-        pytest.skip("demo/certs is generated and gitignored; run demo/gen_certs.sh")
-
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certs / "strong.crt", certs / "strong.key")
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-
-    port = free_port()
-    listener = socket.socket()
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", port))
-    listener.listen(128)
-
-    def serve() -> None:
-        while True:
-            try:
-                client, _ = listener.accept()
-            except OSError:
-                return
-            try:
-                # sslyze opens one connection per suite it tests; each is
-                # expected to fail for most of them, and none of that is
-                # this server's problem.
-                with context.wrap_socket(client, server_side=True) as tls:
-                    tls.recv(1024)
-            except Exception:
-                pass
-            finally:
-                try:
-                    client.close()
-                except OSError:
-                    pass
-
-    for _ in range(16):
-        threading.Thread(target=serve, daemon=True).start()
-
-    request.addfinalizer(listener.close)
-    return "127.0.0.1", port
 
 
 @pytest.fixture(scope="module")

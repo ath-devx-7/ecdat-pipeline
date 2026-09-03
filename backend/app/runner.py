@@ -40,6 +40,7 @@ from app.collectors.certs import CertificateCollector
 from app.collectors.config import ConfigCollector
 from app.collectors.network import NetworkCollector
 from app.config import Settings, get_settings
+from app.core.alignment import AlignmentResult, align
 from app.core.normalizer import normalize
 from app.core.policy import apply_policy
 from app.intake.selection import approved_paths
@@ -94,6 +95,8 @@ class RunResult:
     stored_count: int = 0
     #: ``verdicts`` rows written by the policy engine (§10), one per finding.
     verdicts: tuple[VerdictRow, ...] = ()
+    #: What the drift check did (§9) — including, explicitly, doing nothing.
+    alignment: AlignmentResult | None = None
 
     @property
     def verdict_counts(self) -> dict[str, int]:
@@ -196,23 +199,31 @@ def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> 
 
     result = run_collectors(build_context(session, scan, settings), collectors_for(scan.mode))
     stored = normalize(session, scan.id, result.findings)
-    # §9 puts the alignment check between these two: it runs after the store and
-    # before the policy engine, so a finding already carries its drift note by the
-    # time it is classified. Step 8 inserts it here.
+    # §9's ordering, and it is load bearing: alignment runs after the store and
+    # before the policy engine, so every stage downstream sees findings that
+    # already carry their drift note.
+    alignment = align(session, scan)
     verdicts = apply_policy(session, scan.id)
-    result = dataclass_replace(result, stored_count=len(stored), verdicts=tuple(verdicts))
+    result = dataclass_replace(
+        result,
+        stored_count=len(stored),
+        verdicts=tuple(verdicts),
+        alignment=alignment,
+    )
 
     scan.status = result.status
     scan.completed_at = datetime.now(timezone.utc)
     session.flush()
 
     logger.info(
-        "scan %s finished %s: %d raw finding(s) from %d collector(s), %d stored, %d verdict(s)",
+        "scan %s finished %s: %d raw finding(s) from %d collector(s), %d stored, "
+        "%d verdict(s), alignment %s",
         scan.id,
         scan.status.value,
         len(result.findings),
         len(result.runs),
         result.stored_count,
         len(result.verdicts),
+        alignment.status,
     )
     return result

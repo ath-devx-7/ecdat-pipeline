@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import shutil
+import socket
+import ssl
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -220,3 +223,72 @@ def scan_context(tmp_path: Path):
         )
 
     return _factory
+
+
+# --------------------------------------------------------------------------- #
+# A live TLS endpoint, without Docker
+# --------------------------------------------------------------------------- #
+
+
+def free_port() -> int:
+    """An unused loopback port. Racy in principle, fine for one test process."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def reachable(host: str, port: int, timeout: float = 0.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.fixture(scope="session")
+def local_tls_server(request) -> tuple[str, int]:
+    """A TLS 1.2+ server on a free port, using the demo's own certificate.
+
+    In-process and stdlib-only, so the network collector and the drift check meet
+    a real handshake without Docker running. The TLS 1.2 floor is the point: it
+    makes this the same shape as the demo's clean host, which is what "offered
+    and refused" and "declared floor undercut" both have to be tested against.
+    """
+    certs = DEMO_DIR / "certs"
+    if not (certs / "strong.crt").is_file():
+        pytest.skip("demo/certs is generated and gitignored; run demo/gen_certs.sh")
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certs / "strong.crt", certs / "strong.key")
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+
+    port = free_port()
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", port))
+    listener.listen(128)
+
+    def serve() -> None:
+        while True:
+            try:
+                client, _ = listener.accept()
+            except OSError:
+                return
+            try:
+                # sslyze opens one connection per suite it tests, and most of
+                # them are meant to fail. None of that is this server's problem.
+                with context.wrap_socket(client, server_side=True) as tls:
+                    tls.recv(1024)
+            except Exception:
+                pass
+            finally:
+                try:
+                    client.close()
+                except OSError:
+                    pass
+
+    for _ in range(16):
+        threading.Thread(target=serve, daemon=True).start()
+
+    request.addfinalizer(listener.close)
+    return "127.0.0.1", port

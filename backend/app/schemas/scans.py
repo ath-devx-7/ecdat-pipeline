@@ -189,6 +189,11 @@ class ApproveResponse(BaseModel):
     #: separate keys and stay separate: they are independent classifications, and
     #: a caller that adds them together has already lost the distinction.
     verdict_counts: dict[str, int] = Field(default_factory=dict)
+    #: The drift check (§9). Always present, and explicitly ``skipped`` with a
+    #: reason when there was nothing to compare — the UI has to show that rather
+    #: than an empty panel, because "no drift" and "not checked" are different
+    #: statements about a host.
+    alignment: dict = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #

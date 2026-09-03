@@ -210,4 +210,5 @@ def approve_scan_files(
         finding_count=len(result.findings),
         collectors=[CollectorRunSummary.model_validate(run) for run in result.runs],
         verdict_counts=result.verdict_counts,
+        alignment=result.alignment.as_dict() if result.alignment else {},
     )

@@ -31,7 +31,8 @@ Built one step at a time per `BUILD_PLAN.md`.
 | 5 | Normalizer — canonical identities, source layers | done |
 | 6 | Policy engine — a cited verdict per finding | done |
 | 7 | Network probe — live TLS observation | done |
-| 8–14 | alignment, risk scorer, advisor, remaining collectors, UI, reports | not started |
+| 8 | Alignment check — config against handshake | done |
+| 9–14 | risk scorer, advisor, remaining collectors, UI, reports | not started |
 
 ## Demo environment
 
@@ -149,6 +150,22 @@ observed spelling of an algorithm onto one identity using `policy/algorithm_alia
 `SHA-1`, `sha1`, `SHA1withRSA` and `1.3.14.3.2.26` are one row, not four. A spelling the
 table does not carry keeps its own name and is stamped `identity_resolved: false`; nothing
 is guessed.
+
+Between the two sits the **drift check** (§9), which is the differentiator. It compares
+what a service declares against what it actually negotiated, and reports that they differ
+and exactly where — never which one is wrong. A note fires per probed service rather than
+per config file, so a declaration covering five services that diverges at two produces two
+notes and leaves the three that agree unmentioned. Every note ends with the same sentence
+declining to say whether the difference is a misconfiguration or a deliberate exception:
+that judgement belongs to whoever owns the server.
+
+Its scope guard turns on precedence, not breadth. An nginx `ssl_protocols` outside a
+`server` block is a default a vhost may override, so it is not compared to one probed
+vhost. An `openssl.cnf` `MinProtocol` is a floor the library enforces, so a handshake
+underneath it is a contradiction nothing above it explains — and that is the demo's
+headline finding. When there is nothing to compare, the result is an explicit
+`{"status": "skipped", "reason": ...}`: "no drift found" and "drift never checked" are
+different statements about a host.
 
 The policy engine (§10) then gives every finding a verdict traceable to a published
 standard. It is a pure lookup against `algorithms.yaml`, and `broken_now` and

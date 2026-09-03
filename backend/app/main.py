@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ECDAT",
     description=DESCRIPTION,
-    version="0.7.0",  # build step 7 — network probe
+    version="0.8.0",  # build step 8 — alignment check
     lifespan=lifespan,
 )
 
