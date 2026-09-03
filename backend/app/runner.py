@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 from app.collectors.base import Collector, RawFinding, ScanContext
 from app.collectors.certs import CertificateCollector
 from app.collectors.config import ConfigCollector
+from app.collectors.network import NetworkCollector
 from app.config import Settings, get_settings
 from app.core.normalizer import normalize
 from app.core.policy import apply_policy
@@ -63,8 +64,10 @@ __all__ = [
 #: Step 11 appends the code and binary collectors; step 12 the CBOM importer.
 FILE_COLLECTORS: tuple[Collector, ...] = (CertificateCollector(), ConfigCollector())
 
-#: Collectors that read the probe target list. Step 7 puts the network prober here.
-PROBE_COLLECTORS: tuple[Collector, ...] = ()
+#: Collectors that read the probe target list — never the file tree. The scope
+#: they run under is the scan's declared `probe_targets`, and the prober refuses
+#: anything outside it (§7.5).
+PROBE_COLLECTORS: tuple[Collector, ...] = (NetworkCollector(),)
 
 
 @dataclass(frozen=True, slots=True)

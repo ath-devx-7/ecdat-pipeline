@@ -35,11 +35,11 @@ def test_shipped_policy_pack_loads(shipped_policy_dir: Path) -> None:
     assert len(pack.algorithms) == 10
     assert len(pack.pqc_targets) == 5
     assert pack.prefer_hybrid is True
-    # The alias table arrived with the normalizer in step 5; its own validation
-    # lives in tests/test_normalizer.py, since the loader only has to hand it
-    # over as a mapping. Named groups are still step 7's to populate.
+    # Both mapping files are populated now — the alias table in step 5, the named
+    # groups in step 7. The loader only has to hand them over as mappings; what
+    # they mean is tested in test_normalizer.py and test_collectors_network.py.
     assert dict(pack.aliases)
-    assert dict(pack.named_groups) == {}
+    assert pack.named_groups[4588] == "X25519MLKEM768"
 
 
 def test_version_exposes_the_mosca_defaults(shipped_policy_dir: Path) -> None:

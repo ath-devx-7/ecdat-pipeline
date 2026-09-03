@@ -168,7 +168,7 @@ Waves assume `data_lifetime_years = 20`, Z=12, Y=1.
 | probe 8443 | network | TLS 1.2 accepted | `live` | — |
 | probe 8443 | network | TLS 1.3 **offered and refused** | `live` | — |
 | probe 8443 | network | accepted suites incl. `TLS_RSA_WITH_3DES_EDE_CBC_SHA` | `live` | see gaps |
-| probe 8443 | network | server does not enforce suite preference | `live` | see gaps |
+| probe 8443 | network | suite preference **undetermined** — see gaps | `live` | see gaps |
 | probe 8443 | network | RSA-1024 key in served cert | `live` | `broken_now` |
 | probe 8443 | network | SHA-1 signature on served cert | `live` | `broken_now` |
 
@@ -412,6 +412,7 @@ papering over:
 | Weak TLS 1.2 cipher suites | The pack rules on protocol versions, not on suites |
 | Every hygiene observation — `ssl_prefer_server_ciphers off`, world-readable key files, self-signed and expiring certificates, hardcoded key material | The pack rules on algorithms. These are not algorithms, so nothing in it matches them and the `hygiene` verdict has no members yet |
 | ChaCha20 | The pack's `quantum_safe` entries cite NIST documents, which do not cover a cipher NIST has not approved. A citation for it would have to come from somewhere else |
+| Cipher-suite preference, and hybrid PQC group support | Not a pack gap but a **tool** gap, and the collector says so out loud. sslyze 6.3.1 reports accepted and rejected suites but not whether the server enforces its own ordering, and it enumerates groups from nassl's `OpenSslEcNidEnum` — classical curves only, so `X25519MLKEM768` is never offered and its absence proves nothing. Both produce an explicit `confidence: low` finding rather than silence: a readiness percentage that counts *not measured* as *not present* is a number nobody should act on |
 
 Two gaps that were **not** left open, because they were omissions rather than
 demonstrations, and both were closed the way this table says gaps are closed —

@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ECDAT",
     description=DESCRIPTION,
-    version="0.6.0",  # build step 6 — policy engine
+    version="0.7.0",  # build step 7 — network probe
     lifespan=lifespan,
 )
 

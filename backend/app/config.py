@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     collector_timeout_seconds: int = 120
     scan_timeout_seconds: int = 600
     max_probe_targets: int = 20
+    #: Per-target network timeout handed to sslyze (§7.5). Separate from the
+    #: per-collector budget: one unreachable host must not spend the whole of it.
+    probe_timeout_seconds: int = 10
 
     # Where staged sources land. `folder` sources are read in place and never copied.
     work_root: Path = Path("/tmp/ecdat")

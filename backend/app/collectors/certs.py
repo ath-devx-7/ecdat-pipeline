@@ -25,6 +25,8 @@ import logging
 import os
 import re
 import stat
+from collections.abc import Mapping
+from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, ClassVar
@@ -46,7 +48,7 @@ from app.models.enums import CollectorName, Confidence, Primitive, SourceLayer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CertificateCollector"]
+__all__ = ["CertificateCollector", "CertificateSource", "certificate_findings"]
 
 #: §7.3's candidate list. Presence here means "look at it", not "parse it" — the
 #: key containers below are on both lists and lose the argument.
@@ -253,9 +255,47 @@ def _der_findings(relative: str, absolute: Path, size: int) -> list[RawFinding]:
 # --------------------------------------------------------------------------- #
 
 
+@dataclass(frozen=True, slots=True)
+class CertificateSource:
+    """Where a certificate was seen, and how to label what is found in it.
+
+    The network prober (§7.5) reads certificates off the wire and needs exactly
+    the identities this module produces from disk — the same key, the same
+    signature OID, the same expiry — differing only in ``source_layer``: ``live``
+    is what a handshake served, ``artifact`` is what is installed. Two
+    implementations of "what is in this certificate" would eventually disagree
+    about a certificate that is both, and that pair is precisely what §9
+    compares.
+    """
+
+    location: str
+    collector: CollectorName = CollectorName.CERTS
+    source_layer: SourceLayer = SourceLayer.ARTIFACT
+    #: origin-specific evidence — a file and encoding here, a host:port on the wire
+    evidence: Mapping[str, Any] = dataclass_field(default_factory=dict)
+    #: §7.3 asks for self-signed *in a non-dev path*. A live host has no path.
+    is_dev_path: bool = False
+
+
+def certificate_findings(
+    certificate: x509.Certificate, source: CertificateSource
+) -> list[RawFinding]:
+    """One parsed certificate, as findings. The only place this mapping exists."""
+    identity = {**dict(source.evidence), **_certificate_identity(certificate)}
+
+    findings = [
+        _public_key_finding(certificate, source, identity),
+        _signature_finding(certificate, source, identity),
+    ]
+    findings.extend(_validity_findings(certificate, source, identity))
+    findings.extend(_self_signed_findings(certificate, source, identity))
+    return findings
+
+
 def _certificate_findings(
     relative: str, data: bytes, *, line: int | None, encoding: str, loader
 ) -> list[RawFinding]:
+    """Parse bytes read off disk, then hand over to the shared mapping above."""
     try:
         certificate = loader(data)
     except Exception as exc:  # noqa: BLE001 - any malformed input, same answer
@@ -264,25 +304,19 @@ def _certificate_findings(
         )
         return []
 
-    location = relative if line is None else f"{relative}:{line}"
-    identity = _certificate_identity(certificate, relative, encoding)
-
-    findings = [
-        _public_key_finding(certificate, location, identity),
-        _signature_finding(certificate, location, identity),
-    ]
-    findings.extend(_validity_findings(certificate, location, identity))
-    findings.extend(_self_signed_findings(certificate, relative, location, identity))
-    return findings
+    return certificate_findings(
+        certificate,
+        CertificateSource(
+            location=relative if line is None else f"{relative}:{line}",
+            evidence={"file": relative, "encoding": encoding},
+            is_dev_path=_is_dev_path(relative),
+        ),
+    )
 
 
-def _certificate_identity(
-    certificate: x509.Certificate, relative: str, encoding: str
-) -> dict[str, Any]:
+def _certificate_identity(certificate: x509.Certificate) -> dict[str, Any]:
     """The shared evidence block. Every finding from one certificate carries it."""
     return {
-        "file": relative,
-        "encoding": encoding,
         "subject": certificate.subject.rfc4514_string(),
         "issuer": certificate.issuer.rfc4514_string(),
         "serial_number": format(certificate.serial_number, "x"),
@@ -308,7 +342,7 @@ def _subject_alternative_names(certificate: x509.Certificate) -> list[str]:
 
 
 def _public_key_finding(
-    certificate: x509.Certificate, location: str, identity: dict[str, Any]
+    certificate: x509.Certificate, source: CertificateSource, identity: dict[str, Any]
 ) -> RawFinding:
     """The subject public key.
 
@@ -321,13 +355,13 @@ def _public_key_finding(
     """
     name, key_size, curve = _public_key_shape(certificate.public_key())
     return RawFinding(
-        collector=CollectorName.CERTS,
+        collector=source.collector,
         algorithm_name=name,
-        source_layer=SourceLayer.ARTIFACT,
+        source_layer=source.source_layer,
         confidence=Confidence.HIGH,
         primitive=Primitive.SIGNATURE,
         key_size=key_size,
-        evidence_location=location,
+        evidence_location=source.location,
         evidence_raw={
             **identity,
             "observation": "certificate_public_key",
@@ -361,7 +395,7 @@ def _public_key_shape(public_key: Any) -> tuple[str, int | None, str | None]:
 
 
 def _signature_finding(
-    certificate: x509.Certificate, location: str, identity: dict[str, Any]
+    certificate: x509.Certificate, source: CertificateSource, identity: dict[str, Any]
 ) -> RawFinding:
     """The signature over the certificate. The one place an OID is observed directly."""
     oid = certificate.signature_algorithm_oid
@@ -372,13 +406,13 @@ def _signature_finding(
     except Exception:  # noqa: BLE001 - unsupported hash, the OID is still the finding
         hash_name = None
     return RawFinding(
-        collector=CollectorName.CERTS,
+        collector=source.collector,
         algorithm_name=friendly or oid.dotted_string,
         algorithm_oid=oid.dotted_string,
-        source_layer=SourceLayer.ARTIFACT,
+        source_layer=source.source_layer,
         confidence=Confidence.HIGH,
         primitive=Primitive.SIGNATURE,
-        evidence_location=location,
+        evidence_location=source.location,
         evidence_raw={
             **identity,
             "observation": "certificate_signature_algorithm",
@@ -402,7 +436,7 @@ def _oid_name(oid: x509.ObjectIdentifier) -> str | None:
 
 
 def _validity_findings(
-    certificate: x509.Certificate, location: str, identity: dict[str, Any]
+    certificate: x509.Certificate, source: CertificateSource, identity: dict[str, Any]
 ) -> list[RawFinding]:
     remaining = certificate.not_valid_after_utc - datetime.now(timezone.utc)
 
@@ -415,11 +449,11 @@ def _validity_findings(
 
     return [
         RawFinding(
-            collector=CollectorName.CERTS,
+            collector=source.collector,
             algorithm_name=name,
-            source_layer=SourceLayer.ARTIFACT,
+            source_layer=source.source_layer,
             confidence=Confidence.HIGH,
-            evidence_location=location,
+            evidence_location=source.location,
             evidence_raw={
                 **identity,
                 "observation": observation,
@@ -431,21 +465,18 @@ def _validity_findings(
 
 
 def _self_signed_findings(
-    certificate: x509.Certificate,
-    relative: str,
-    location: str,
-    identity: dict[str, Any],
+    certificate: x509.Certificate, source: CertificateSource, identity: dict[str, Any]
 ) -> list[RawFinding]:
     """§7.3: self-signed *in a non-dev path*. One under ``tests/`` is furniture."""
-    if certificate.issuer != certificate.subject or _is_dev_path(relative):
+    if certificate.issuer != certificate.subject or source.is_dev_path:
         return []
     return [
         RawFinding(
-            collector=CollectorName.CERTS,
+            collector=source.collector,
             algorithm_name=OBS_CERTIFICATE_SELF_SIGNED,
-            source_layer=SourceLayer.ARTIFACT,
+            source_layer=source.source_layer,
             confidence=Confidence.HIGH,
-            evidence_location=location,
+            evidence_location=source.location,
             evidence_raw={**identity, "observation": "certificate_self_signed"},
         )
     ]

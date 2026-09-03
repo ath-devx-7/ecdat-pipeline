@@ -367,6 +367,54 @@ aliases:
     source: "RFC 7748 §5"
     names: [X448, x448]
 
+  # TLS named groups, as the probe observes them on the wire. Filed under ECDH
+  # and key_exchange because a *negotiated group* is a key agreement — which is
+  # the only context anything in this system reports a bare curve name from. A
+  # certificate's curve is never an algorithm name here: the certificate
+  # collector reports `ECDSA` and keeps the curve as evidence, so there is no
+  # path by which a signature key lands under this entry.
+  secp256r1:
+    family: ECDH
+    primitive: key_exchange
+    key_size: 256
+    source: "RFC 8422 §5.1.1"
+    names: [secp256r1, prime256v1, P-256, nistp256]
+
+  secp384r1:
+    family: ECDH
+    primitive: key_exchange
+    key_size: 384
+    source: "RFC 8422 §5.1.1"
+    names: [secp384r1, prime384v1, P-384, nistp384]
+
+  secp521r1:
+    family: ECDH
+    primitive: key_exchange
+    key_size: 521
+    source: "RFC 8422 §5.1.1"
+    names: [secp521r1, P-521, nistp521]
+
+  ffdhe2048:
+    family: DH
+    primitive: key_exchange
+    key_size: 2048
+    source: "RFC 7919 §2"
+    names: [ffdhe2048]
+
+  ffdhe3072:
+    family: DH
+    primitive: key_exchange
+    key_size: 3072
+    source: "RFC 7919 §2"
+    names: [ffdhe3072]
+
+  ffdhe4096:
+    family: DH
+    primitive: key_exchange
+    key_size: 4096
+    source: "RFC 7919 §2"
+    names: [ffdhe4096]
+
   # ------------------------------------------------------------------------- #
   # Symmetric ciphers
   # ------------------------------------------------------------------------- #

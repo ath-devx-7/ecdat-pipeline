@@ -28,7 +28,10 @@ Built one step at a time per `BUILD_PLAN.md`.
 | 2 | Intake — staging, surface scan, approval gate | done |
 | 3 | Demo environment — targets to scan | done |
 | 4 | Certificate and config collectors | done |
-| 5–14 | normalizer, analysis, remaining collectors, UI, reports | not started |
+| 5 | Normalizer — canonical identities, source layers | done |
+| 6 | Policy engine — a cited verdict per finding | done |
+| 7 | Network probe — live TLS observation | done |
+| 8–14 | alignment, risk scorer, advisor, remaining collectors, UI, reports | not started |
 
 ## Demo environment
 
@@ -98,13 +101,14 @@ file reached the approval screen.
 
 ## Collectors
 
-Six in the finished system (`SPEC.md` §7); two built so far, and both read only what
-approval put in scope.
+Six in the finished system (`SPEC.md` §7); three built so far. The two file collectors
+read only what approval put in scope; the prober reaches only hosts the scan declared.
 
 | Collector | Reads | `source_layer` |
 |---|---|---|
 | `certs` | `.pem .crt .cer .der` by extension, plus any file containing a `BEGIN CERTIFICATE` block | `artifact` |
 | `config` | `openssl.cnf`, `nginx.conf`, `sshd_config`, `java.security`, matched by name anywhere in the tree | `config` |
+| `network` | The `{host, port}` pairs in `scan.probe_targets`, and nothing else | `live` |
 
 Three properties are worth stating because they are enforced in one place rather than
 trusted to each collector:
@@ -121,13 +125,36 @@ trusted to each collector:
   `partial` naming the collector that died, rather than failing whole or — worse —
   reporting `complete` over a hole.
 
+The prober adds a fourth, and it is a security control rather than a nicety: **it refuses
+any host not in `scan.probe_targets`**, checked at the point of connection rather than
+while iterating the list, so a caller that reaches past `collect()` still cannot make it
+open a socket. An unbounded prober is an attack tool. Every target attempted is logged,
+refusals included.
+
+It also stores its silences. A server that refuses TLS 1.0 and a server that never
+answered are indistinguishable if you only record successes, so "offered and refused",
+"unreachable" and "the scan command errored" are three different findings. A refusal
+deliberately does *not* carry the TLS family — the policy engine would otherwise match it
+against `tls-legacy` and report a host for rejecting TLS 1.0 as though it offered it.
+
 `source_layer` is the distinction the drift check (§9) runs on: `config` findings are
 *claims* about what a service will negotiate, and `confidence: high` on one means "the
-declaration was read correctly", never "the declaration is true". Verdicts are not a
-collector's business — those come from the policy pack in step 6, against a citation.
+declaration was read correctly", never "the declaration is true". `live` findings are the
+facts they get compared against.
 
-Collector output does not reach the `findings` table yet; the normalizer (step 5) is what
-writes it. Until then `POST /api/scans/{id}/approve` returns the counts.
+## Analysis
+
+Collector output becomes `findings` rows through the normalizer (§8), which collapses every
+observed spelling of an algorithm onto one identity using `policy/algorithm_aliases.yaml` —
+`SHA-1`, `sha1`, `SHA1withRSA` and `1.3.14.3.2.26` are one row, not four. A spelling the
+table does not carry keeps its own name and is stamped `identity_resolved: false`; nothing
+is guessed.
+
+The policy engine (§10) then gives every finding a verdict traceable to a published
+standard. It is a pure lookup against `algorithms.yaml`, and `broken_now` and
+`quantum_vulnerable` are independent classifications rather than two points on one scale —
+RSA-4096 is quantum-vulnerable and perfectly secure today. Anything with no matching entry
+is `unknown`, and the row still says *why* no standard is cited.
 
 ## Policy pack
 

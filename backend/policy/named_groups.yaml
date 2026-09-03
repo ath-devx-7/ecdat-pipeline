@@ -1,6 +1,54 @@
 # TLS named-group code point → group name (SPEC.md §7.5).
 #
-# Exists because sslyze may report hybrid PQC groups such as X25519MLKEM768
-# (code point 0x11EC) as an unrecognised raw code point. Populated in build
-# step 7 once the installed sslyze's actual behaviour has been observed.
-groups: {}
+# WHAT THE INSTALLED SSLYZE ACTUALLY DOES
+#
+# §7.5 says to test the installed sslyze against a hybrid-capable endpoint before
+# building on its behaviour, and to handle whichever of two behaviours turns up:
+# a raw code point (map it here) or an error (catch it and report low
+# confidence). Checked against sslyze 6.3.1 / nassl 5.4.0, the answer is neither.
+#
+# sslyze reports a negotiated group through nassl's `EcDhEphemeralKeyInfo`, whose
+# `curve_name` comes from `OpenSslEcNidEnum` — thirty classical curves, X25519
+# and X448 among them, and no post-quantum or hybrid entry at all. So it does not
+# raise on `X25519MLKEM768` and it does not report `0x11EC`: it never asks. The
+# absence of a hybrid group from a scan result is therefore not evidence that the
+# server lacks one, which is why the collector emits an explicit
+# `pqc-group-support-undetermined` finding at `confidence: low` for every target
+# rather than letting a readiness percentage quietly count "not measured" as
+# "not present".
+#
+# The one shape nassl *does* produce for a group it cannot name is
+# `unknown-curve-with-openssl-id-<n>`. That number is an OpenSSL NID, not a TLS
+# code point — a different numbering space — so this table is deliberately not
+# consulted for it. The collector reports the string verbatim at low confidence
+# instead of translating between two registries that do not correspond.
+#
+# WHY THE TABLE IS POPULATED ANYWAY
+#
+# Because the mapping it exists for is the one a newer sslyze, or the CBOM import
+# path (§7.6), can hand over: a bare code point from the wire. Entries are the
+# IANA registry values, and the collector resolves `0x11EC` or `4588` through
+# them. Keys are decimal; the collector parses the hex spelling too.
+#
+# Source: IANA "Transport Layer Security (TLS) Parameters — TLS Supported
+# Groups" registry.
+
+groups:
+  # Elliptic curve groups (RFC 8422 §5.1.1, RFC 7919)
+  23: secp256r1
+  24: secp384r1
+  25: secp521r1
+  29: x25519
+  30: x448
+
+  # Finite-field groups (RFC 7919 §2)
+  256: ffdhe2048
+  257: ffdhe3072
+  258: ffdhe4096
+  259: ffdhe6144
+  260: ffdhe8192
+
+  # Hybrid post-quantum key exchange. 4588 (0x11EC) is the code point §7.5 names
+  # explicitly and the one a TLS 1.3 client with OpenSSL 3.5 negotiates today.
+  4587: SecP256r1MLKEM768
+  4588: X25519MLKEM768
