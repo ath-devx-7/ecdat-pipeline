@@ -28,3 +28,6 @@ htmlcov/
 
 # Vendored native libraries for local tooling (WeasyPrint needs Pango on Windows)
 .tools/
+
+# Local list of repositories to test against
+repo_links.txt
