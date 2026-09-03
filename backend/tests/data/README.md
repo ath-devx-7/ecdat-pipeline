@@ -21,3 +21,18 @@ cp demo/certs/weak.crt backend/tests/data/weak-rsa1024-sha1.crt
 Modern `cryptography` refuses to *sign* with SHA-1, so this file cannot be built
 from Python — which is exactly why it is committed rather than generated in a
 fixture.
+
+`cryptodemo-openssl1.1.elf` is a copy of `demo/cbin/build/cryptodemo`, the compiled
+target G: dynamically linked against `libcrypto.so.1.1`, symbols intact, with the
+`OpenSSL 1.1.1f` banner in `.rodata`. The demo copy is produced by the compose
+stack's `cbin` service and gitignored. It is committed here so the binary
+collector's tests run on a fresh clone with no Docker; they prefer the demo's own
+build when it exists. It is never executed — pyelftools reads its headers,
+`.dynsym` and `.rodata` and nothing more.
+
+Regenerating it:
+
+```sh
+docker compose -f demo/docker-compose.yml up --build cbin
+cp demo/cbin/build/cryptodemo backend/tests/data/cryptodemo-openssl1.1.elf
+```

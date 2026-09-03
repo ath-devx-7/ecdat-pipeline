@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     git_clone_timeout_seconds: int = 300
     docker_save_timeout_seconds: int = 600
 
+    #: The code collector's rule set (§7.1). Always a local file: the scan path
+    #: never fetches a registry ruleset (§1).
+    semgrep_rules_path: Path = BACKEND_ROOT / "semgrep_rules" / "crypto.yaml"
+    #: ``--max-memory`` handed to Semgrep, in MB. Exceeding it costs the file,
+    #: not the scan — the collector reports partial.
+    semgrep_max_memory_mb: int = 2000
+    #: Explicit Semgrep executable. Unset means the one installed beside the
+    #: running interpreter, then whatever is on PATH.
+    semgrep_executable: str | None = None
+
     #: Directory names pruned during the surface scan. `.git` holds packed
     #: objects that are not deployed artefacts and would consume the file cap
     #: before a single source file were offered for approval.

@@ -24,17 +24,25 @@ import pytest
 from app.models.enums import CollectorName
 
 
-def test_a_demo_scan_produces_findings_from_both_collectors(demo_scan) -> None:
+def test_a_demo_scan_produces_findings_from_every_file_collector(demo_scan) -> None:
+    """Build step 11's exit criterion: all four file collectors, all reporting."""
     assert demo_scan["status"] == "complete"
     assert demo_scan["finding_count"] > 0
 
     runs = {run["name"]: run for run in demo_scan["collectors"]}
-    assert set(runs) == {CollectorName.CERTS.value, CollectorName.CONFIG.value}
-    assert all(run["error"] is None for run in runs.values())
+    assert set(runs) == {
+        CollectorName.CERTS.value,
+        CollectorName.CONFIG.value,
+        CollectorName.CODE.value,
+        CollectorName.BINARY.value,
+    }
+    assert all(run["error"] is None for run in runs.values()), runs
 
-    # The config half is guaranteed by the committed tree: two nginx.conf, two
-    # openssl.cnf, an sshd_config and a java.security.
+    # The config and code halves are guaranteed by the committed tree: two
+    # nginx.conf, two openssl.cnf, an sshd_config, a java.security, and the
+    # Python, Java and C sources of targets C, D and G.
     assert runs[CollectorName.CONFIG.value]["finding_count"] > 0
+    assert runs[CollectorName.CODE.value]["finding_count"] > 0
 
 
 def test_a_demo_scan_finds_the_generated_certificates(demo_scan, demo_dir: Path) -> None:
@@ -43,6 +51,15 @@ def test_a_demo_scan_finds_the_generated_certificates(demo_scan, demo_dir: Path)
 
     runs = {run["name"]: run for run in demo_scan["collectors"]}
     assert runs[CollectorName.CERTS.value]["finding_count"] > 0
+
+
+def test_a_demo_scan_reads_the_compiled_binary(demo_scan, demo_dir: Path) -> None:
+    """Target G. Built by the compose stack and gitignored, so skipped when absent."""
+    if not (demo_dir / "cbin" / "build" / "cryptodemo").is_file():
+        pytest.skip("demo/cbin/build is generated; bring the compose stack up once")
+
+    runs = {run["name"]: run for run in demo_scan["collectors"]}
+    assert runs[CollectorName.BINARY.value]["finding_count"] > 0
 
 
 def test_a_demo_scan_reads_only_what_was_approved(client, demo_dir: Path) -> None:

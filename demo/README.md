@@ -235,7 +235,7 @@ the primitive gate in the whole demo.
 |---|---|---|---|---|
 | `weak-hash-md5` | `hashlib.md5(...)` | `hash` | `broken_now` | `wave_0` |
 | `weak-hash-sha1` | `hashlib.sha1(...)` | `hash` | see gaps | `verify` |
-| `rsa-weak-key` | `rsa.generate_private_key(key_size=1024)` | `signature` | `broken_now` | `wave_0` |
+| `rsa-weak-key` | `rsa.generate_private_key(key_size=1024)` | `unknown` — see below | `broken_now` | `wave_0` |
 | `aes-ecb` | `Cipher(algorithms.AES(...), modes.ECB())` | `cipher` | `broken_now` | `wave_0` |
 | `weak-cipher-3des` | `algorithms.TripleDES(...)` | `cipher` | see gaps | `verify` |
 | `hardcoded-key` ×2 | byte-literal key material | — | see gaps | — |
@@ -244,6 +244,25 @@ the primitive gate in the whole demo.
 `source_layer: source`, `confidence: high` for the pattern matches. The entropy match
 is a *shape*, not a fact about the value — it belongs at `medium` at best, and this is
 where a scanner has to resist claiming more than it knows.
+
+**The key generation has no primitive.** `issue_signing_key()` says in its name what
+the key is for, but `rsa.generate_private_key(key_size=1024)` does not, and the
+collector reports the call, not the function it sits in. It is `broken_now` on key size
+alone, which lands in `wave_0` whatever the primitive — and an RSA key of unknown use
+gets no `pqc_targets` match, so its recommendation is `unknown` rather than a guess
+between ML-DSA and ML-KEM (§11). The same holds for `kpg.initialize(1024)` in `javaapp`
+and `RSA_generate_key_ex(rsa, 1024, ...)` in `cbin`.
+
+**Key material stays out of the database.** The `hardcoded-key` and
+`high-entropy-literal` findings record the line, the literal's length and its entropy,
+and a redaction marker where the matched text would be. The `hardcoded-key` marker on
+the AES key line also produces a second finding at the `Cipher(...)` call, because
+Semgrep propagates the module-level constant into `algorithms.AES(...)` — a byte
+literal handed to a cipher, reported where it is handed over.
+
+**Semgrep runs offline.** `--metrics=off`, `--disable-version-check`, a local rule
+file only (`backend/semgrep_rules/crypto.yaml`), and the approved paths passed
+explicitly — never a directory walk, never a registry ruleset.
 
 Note `requirements.txt` pins `cryptography==42.0.8`, because 43 moved `TripleDES` and
 `ARC4` into `hazmat.decrepit`. A service pinned to an old release in order to keep a
@@ -260,6 +279,10 @@ deprecated algorithm working is itself exactly the situation this tool reports.
 | `hardcoded-key` | key material as a `String` literal | — | see gaps |
 | `config-java-tls-disabled` | `jdk.tls.disabledAlgorithms` | — | `config` layer |
 | `config-java-certpath-disabled` | `jdk.certpath.disabledAlgorithms` | — | `config` layer |
+
+`weak-cipher-des` is reported as `DES` with mode `ECB`: the collector splits the Java
+transformation string `DES/ECB/PKCS5Padding` into the algorithm and the mode, and both
+the weak-cipher rule and the ECB rule fire on the one line.
 
 `java.security` is the JDK 8-era default carried onto a JDK 17 runtime. What it
 *permits by omission* is the finding: TLSv1 and TLSv1.1 are absent from the disabled
@@ -365,6 +388,15 @@ those findings sit in the `verify` wave where the action is confirmation.
 | `TLS_RSA_WITH_3DES_EDE_CBC_SHA`, `AES-256-GCM`, `sha1WithRSAEncryption` | `.rodata` | `medium` |
 | `OpenSSL 1.1.1f  31 Mar 2020` | `.rodata` | `medium` |
 
+The collector emits these as: one `linked_library` finding per crypto library in
+`DT_NEEDED` (`libc.so.6` is not one), carrying `library: openssl` and `version: 1.1`
+exactly as the soname spells it; one finding per *algorithm* the dynamic symbols prove
+callable, with every contributing symbol listed — `MD5_Init`, `MD5_Update` and
+`MD5_Final` are one capability, not three rows; one `library_version_string` finding
+for the `OPENSSL_VERSION_TEXT` banner; and one `rodata_string` finding per string that
+spells a cipher suite or an algorithm the alias table knows. Format strings and record
+ids in the same section produce nothing.
+
 `source_layer: artifact`. The confidence split is the point: a symbol in `.dynsym`
 proves the binary can call the function, while a string in `.rodata` might be a log
 label, a lookup key or dead data. Reporting both at `high` would make the higher
@@ -375,7 +407,8 @@ number meaningless.
 OpenSSL 3.3 from 3.5, which is exactly the boundary `requires: openssl>=3.5` needs. The
 `OPENSSL_VERSION_TEXT` string in `.rodata` gives the precise version for this binary.
 Whatever the advisor does when it only has a soname, it must not round in the
-optimistic direction.
+optimistic direction — and it does not: a bare `libcrypto.so.3` is reported as unable
+to confirm `openssl>=3.5`, and the banner from the same binary is what settles it.
 
 The binary is built with symbols intact and dynamically linked. Stripping it would
 leave `DT_NEEDED` intact but lose the symbol evidence, which is half the target.

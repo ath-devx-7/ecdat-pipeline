@@ -26,7 +26,11 @@ directory. "An unapproved file is never opened" is then a property of this
 module, not a promise five collectors each have to keep.
 
 **Survivability.** A collector that raises returns an empty list and marks the
-scan ``partial``. It never kills the run — see ``app/runner.py``.
+scan ``partial``. It never kills the run — see ``app/runner.py``. A collector
+that got *part* of the way — Semgrep ran out of memory on one file and finished
+the rest — raises :class:`CollectorPartial` carrying what it did find, so the
+scan is ``partial`` and names the gap without throwing away the findings around
+it.
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "Collector",
+    "CollectorPartial",
     "CollectorTimeout",
     "RawFinding",
     "ScanContext",
@@ -54,6 +59,21 @@ __all__ = [
 
 class CollectorTimeout(RuntimeError):
     """A collector ran past its per-collector budget (§2) and stopped itself."""
+
+
+class CollectorPartial(RuntimeError):
+    """A collector finished with findings *and* a gap it could not close.
+
+    Raised rather than returned so the runner treats it like any other failure —
+    the scan is ``partial`` and the message names what went wrong — while the
+    findings gathered before and around the gap are kept. Losing the twenty
+    files Semgrep parsed because it ran out of memory on the twenty-first would
+    be the worse outcome.
+    """
+
+    def __init__(self, findings: "Sequence[RawFinding]", message: str) -> None:
+        super().__init__(message)
+        self.findings: tuple[RawFinding, ...] = tuple(findings)
 
 
 @dataclass(frozen=True, slots=True)

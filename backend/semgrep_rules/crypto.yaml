@@ -1,0 +1,273 @@
+# ECDAT code-scan rules — SPEC.md §7.1, build step 11.
+#
+# Loaded by app/collectors/code.py, and only from this file: the collector never
+# fetches a registry ruleset, because the scan path makes no network calls (§1).
+#
+# Every rule carries a `metadata.ecdat` block telling the collector how to turn a
+# match into a RawFinding. A rule reports what it SAW — `hashlib.md5`, the
+# transformation string handed to `Cipher.getInstance` — never a verdict.
+# Resolving the spelling to a family is the normalizer's job (§8); deciding
+# whether it is broken is the policy engine's (§10).
+#
+# HOW CAPTURED VALUES REACH THE COLLECTOR
+#
+# Semgrep without a login omits `metavars` and `lines` from its JSON output, but
+# it still interpolates metavariables into `message`. So every rule that needs a
+# captured value writes it into the message as `ecdat|key=$VAR|...`, and the
+# collector parses that. The keys:
+#
+#   algorithm       the spelling to record as algorithm_name
+#   transformation  a Java "ALG/MODE/PADDING" string; split by the collector
+#   key_size        an integer
+#   cipher          the cipher a hardcoded key was handed to (evidence only)
+#   literal         a matched string literal — must be the LAST field, and the
+#                   collector never stores it; it computes entropy and drops it
+#
+# Static values live in `metadata.ecdat`:
+#
+#   algorithm         literal spelling when the pattern fixes it
+#   algorithm_prefix  prepended to a captured `algorithm` (`algorithms.` so the
+#                     finding reads `algorithms.TripleDES`, as the source does)
+#   primitive         hash | cipher | signature | key_exchange
+#   mode              ECB, CBC — when the pattern itself fixes the mode
+#   observation       tag stored in evidence_raw
+#   confidence        overrides §7.1's default of high
+#   min_entropy / min_length
+#                     the collector's post-filter for string literals; strings
+#                     as YAML because Semgrep rejects floats in metadata
+
+rules:
+
+  # ------------------------------------------------------------------------- #
+  # Weak hashes
+  # ------------------------------------------------------------------------- #
+
+  - id: ecdat.python.weak-hash-md5
+    languages: [python]
+    severity: WARNING
+    message: ecdat
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.new("md5", ...)
+    metadata:
+      ecdat: { algorithm: hashlib.md5, primitive: hash, observation: hash_call }
+
+  - id: ecdat.python.weak-hash-sha1
+    languages: [python]
+    severity: WARNING
+    message: ecdat
+    pattern-either:
+      - pattern: hashlib.sha1(...)
+      - pattern: hashlib.new("sha1", ...)
+    metadata:
+      ecdat: { algorithm: hashlib.sha1, primitive: hash, observation: hash_call }
+
+  - id: ecdat.java.weak-hash
+    languages: [java]
+    severity: WARNING
+    message: ecdat|algorithm=$ALG
+    patterns:
+      - pattern: MessageDigest.getInstance("$ALG", ...)
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: (?i)^(MD2|MD4|MD5|SHA-?1)$
+    metadata:
+      ecdat: { primitive: hash, observation: hash_call }
+
+  - id: ecdat.c.weak-hash
+    languages: [c]
+    severity: WARNING
+    message: ecdat|algorithm=$F
+    patterns:
+      - pattern: $F(...)
+      - metavariable-regex:
+          metavariable: $F
+          regex: ^(MD5_Init|MD5|EVP_md5|MD4_Init|MD4|EVP_md4|SHA1_Init|SHA1|EVP_sha1)$
+    metadata:
+      ecdat: { primitive: hash, observation: hash_call }
+
+  # ------------------------------------------------------------------------- #
+  # Weak ciphers
+  # ------------------------------------------------------------------------- #
+
+  - id: ecdat.python.weak-cipher
+    languages: [python]
+    severity: WARNING
+    message: ecdat|algorithm=$ALG
+    patterns:
+      - pattern: algorithms.$ALG(...)
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: ^(TripleDES|DES|ARC4|RC4|Blowfish|IDEA|CAST5|SEED)$
+    metadata:
+      ecdat: { algorithm_prefix: "algorithms.", primitive: cipher, observation: cipher_constructor }
+
+  - id: ecdat.java.weak-cipher
+    languages: [java]
+    severity: WARNING
+    message: ecdat|transformation=$T
+    patterns:
+      - pattern: Cipher.getInstance("$T", ...)
+      - metavariable-regex:
+          metavariable: $T
+          regex: (?i)^(DES|DESede|TripleDES|RC4|ARCFOUR|RC2|Blowfish)(/.*)?$
+    metadata:
+      ecdat: { primitive: cipher, observation: cipher_constructor }
+
+  - id: ecdat.c.weak-cipher
+    languages: [c]
+    severity: WARNING
+    message: ecdat|algorithm=$F
+    patterns:
+      - pattern: $F(...)
+      - metavariable-regex:
+          metavariable: $F
+          regex: ^(DES_ecb_encrypt|DES_ncbc_encrypt|DES_cbc_encrypt|DES_ede3_cbc_encrypt|DES_ede3_ecb_encrypt|RC4|RC4_set_key|EVP_des_ecb|EVP_des_cbc|EVP_des_ede3_cbc|EVP_rc4)$
+    metadata:
+      ecdat: { primitive: cipher, observation: cipher_call }
+
+  # ------------------------------------------------------------------------- #
+  # ECB mode, with the algorithm captured
+  # ------------------------------------------------------------------------- #
+
+  - id: ecdat.python.ecb-mode
+    languages: [python]
+    severity: WARNING
+    message: ecdat|algorithm=$ALGO
+    pattern: Cipher(algorithms.$ALGO(...), modes.ECB(...), ...)
+    metadata:
+      ecdat: { algorithm_prefix: "algorithms.", primitive: cipher, mode: ECB, observation: ecb_mode }
+
+  - id: ecdat.java.ecb-mode
+    languages: [java]
+    severity: WARNING
+    message: ecdat|transformation=$T
+    patterns:
+      - pattern: Cipher.getInstance("$T", ...)
+      - metavariable-regex:
+          metavariable: $T
+          regex: (?i)^[^/]+/ECB(/.*)?$
+    metadata:
+      ecdat: { primitive: cipher, observation: ecb_mode }
+
+  # ------------------------------------------------------------------------- #
+  # Weak RSA key sizes — metavariable-comparison, as §7.1 writes it
+  # ------------------------------------------------------------------------- #
+
+  - id: ecdat.python.rsa-weak-key
+    languages: [python]
+    severity: WARNING
+    message: ecdat|key_size=$N
+    patterns:
+      - pattern: rsa.generate_private_key(..., key_size=$N, ...)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      ecdat: { algorithm: RSA, observation: rsa_keygen }
+
+  - id: ecdat.java.rsa-weak-key
+    languages: [java]
+    severity: WARNING
+    message: ecdat|key_size=$N
+    patterns:
+      - pattern-inside: |
+          KeyPairGenerator $KPG = KeyPairGenerator.getInstance("RSA", ...);
+          ...
+      - pattern: $KPG.initialize($N, ...)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      ecdat: { algorithm: RSA, observation: rsa_keygen }
+
+  - id: ecdat.c.rsa-weak-key
+    languages: [c]
+    severity: WARNING
+    message: ecdat|key_size=$N
+    patterns:
+      - pattern-either:
+          - pattern: RSA_generate_key_ex($R, $N, ...)
+          - pattern: RSA_generate_key($N, ...)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      ecdat: { algorithm: RSA, observation: rsa_keygen }
+
+  # ------------------------------------------------------------------------- #
+  # Hardcoded key material
+  # ------------------------------------------------------------------------- #
+
+  - id: ecdat.python.hardcoded-key-literal
+    languages: [python]
+    severity: WARNING
+    message: ecdat|cipher=$ALG
+    patterns:
+      - pattern-either:
+          - pattern: algorithms.$ALG(b"...", ...)
+          - pattern: algorithms.$ALG("...", ...)
+    metadata:
+      ecdat: { algorithm: hardcoded-key-material, observation: hardcoded_key, confidence: high }
+
+  - id: ecdat.python.hardcoded-key-named
+    languages: [python]
+    severity: WARNING
+    message: ecdat
+    patterns:
+      - pattern: $NAME = b"..."
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i).*(key|secret|token|passw).*
+    metadata:
+      ecdat: { algorithm: hardcoded-key-material, observation: hardcoded_key, confidence: medium }
+
+  - id: ecdat.java.hardcoded-key-named
+    languages: [java]
+    severity: WARNING
+    message: ecdat
+    patterns:
+      - pattern-either:
+          - pattern: String $NAME = "...";
+          - pattern: byte[] $NAME = "...".getBytes(...);
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i).*(key|secret|token|passw).*
+    metadata:
+      ecdat: { algorithm: hardcoded-key-material, observation: hardcoded_key, confidence: medium }
+
+  - id: ecdat.java.hardcoded-key-spec
+    languages: [java]
+    severity: WARNING
+    message: ecdat
+    pattern: new SecretKeySpec("...".getBytes(...), ...)
+    metadata:
+      ecdat: { algorithm: hardcoded-key-material, observation: hardcoded_key, confidence: high }
+
+  # ------------------------------------------------------------------------- #
+  # High-entropy string literals — the shape of a credential, nothing more
+  # ------------------------------------------------------------------------- #
+
+  - id: ecdat.python.high-entropy-literal
+    languages: [python]
+    severity: INFO
+    message: ecdat|literal=$S
+    patterns:
+      - pattern: $NAME = "$S"
+      - metavariable-regex:
+          metavariable: $S
+          regex: ^.{20,}$
+    metadata:
+      ecdat: { algorithm: high-entropy-string-literal, observation: high_entropy_literal, confidence: medium, min_entropy: "4.5", min_length: "20" }
+
+  - id: ecdat.java.high-entropy-literal
+    languages: [java]
+    severity: INFO
+    message: ecdat|literal=$S
+    patterns:
+      - pattern: String $NAME = "$S";
+      - metavariable-regex:
+          metavariable: $S
+          regex: ^.{20,}$
+    metadata:
+      ecdat: { algorithm: high-entropy-string-literal, observation: high_entropy_literal, confidence: medium, min_entropy: "4.5", min_length: "20" }

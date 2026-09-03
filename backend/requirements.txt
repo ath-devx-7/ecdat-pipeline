@@ -17,6 +17,12 @@ httpx>=0.27
 cryptography>=42.0
 crossplane>=0.5.8
 
+# Step 11 - code and binary collectors. Semgrep is invoked as a subprocess with
+# --json and a local rule file only; pyelftools reads ELF headers, .dynsym and
+# .rodata without executing anything.
+semgrep>=1.100
+pyelftools>=0.31
+
 # Step 7 - network probe. Imported as a library, not shelled out to: SPEC.md 7.5
 # wants typed ServerScanResult objects rather than a JSON round-trip. Pulls in
 # nassl, which pins cryptography below the newest release.

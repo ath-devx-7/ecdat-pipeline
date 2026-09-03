@@ -631,8 +631,22 @@ def test_the_demo_weak_host_is_blocked_on_its_observed_protocol_ceiling(
 
     rows = advise_scan(db_session, scan)
 
-    blocked = [row for row in rows if row.status is RecommendationStatus.BLOCKED]
-    assert blocked, [row.status for row in rows]
-    chain = {item["unmet"]: item for item in blocked[0].prerequisites}
-    assert chain["TLS 1.3"]["observed"] == "TLS 1.2"
-    assert "openssl>=3.5" in chain
+    # The signature rows are blocked too, on OpenSSL alone; the protocol clause
+    # is the key exchange's, so that is the row the chain is read from.
+    primitives = {
+        finding.id: finding.primitive
+        for finding in db_session.scalars(sa.select(Finding).where(Finding.scan_id == scan.id))
+    }
+    blocked = [
+        row
+        for row in rows
+        if row.status is RecommendationStatus.BLOCKED
+        and primitives[row.finding_id] is Primitive.KEY_EXCHANGE
+    ]
+    assert blocked, [(row.status, primitives[row.finding_id]) for row in rows]
+    for row in blocked:
+        chain = {item["unmet"]: item for item in row.prerequisites}
+        assert chain["TLS 1.3"]["observed"] == "TLS 1.2"
+        assert chain["TLS 1.3"]["observed_at"] == f"{HOST}:{PORT}"
+        # Nothing in a probe says which OpenSSL the server runs, so it is not confirmed.
+        assert chain["openssl>=3.5"]["observed"] is None

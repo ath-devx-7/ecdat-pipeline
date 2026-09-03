@@ -9,6 +9,9 @@ that eventually gets forgotten:
 It never kills the run. Losing the certificate findings because the nginx parser
 tripped over one file would be a worse outcome than an honest partial result, and
 ``partial`` is a status the API reports so nobody mistakes it for a clean scan.
+The one refinement is :class:`CollectorPartial`: a collector that finished with
+a hole in its result — Semgrep out of memory on one file — hands over what it did
+find, and the scan is ``partial`` with the findings kept rather than discarded.
 
 **One collector's timeout is its own.** Each gets a fresh budget (§2), enforced
 cooperatively inside the collector's own loop — see ``ScanContext.check_budget``.
@@ -36,8 +39,10 @@ from time import monotonic
 
 from sqlalchemy.orm import Session
 
-from app.collectors.base import Collector, RawFinding, ScanContext
+from app.collectors.base import Collector, CollectorPartial, RawFinding, ScanContext
+from app.collectors.binary import BinaryCollector
 from app.collectors.certs import CertificateCollector
+from app.collectors.code import CodeCollector
 from app.collectors.config import ConfigCollector
 from app.collectors.network import NetworkCollector
 from app.config import Settings, get_settings
@@ -65,8 +70,14 @@ __all__ = [
 ]
 
 #: Collectors that read the approved file tree. Registration order is run order.
-#: Step 11 appends the code and binary collectors; step 12 the CBOM importer.
-FILE_COLLECTORS: tuple[Collector, ...] = (CertificateCollector(), ConfigCollector())
+#: Step 12 adds the CBOM importer. The YARA stub (``collectors/binary_yara.py``)
+#: is deliberately not here — see its docstring.
+FILE_COLLECTORS: tuple[Collector, ...] = (
+    CertificateCollector(),
+    ConfigCollector(),
+    CodeCollector(),
+    BinaryCollector(),
+)
 
 #: Collectors that read the probe target list — never the file tree. The scope
 #: they run under is the scan's declared `probe_targets`, and the prober refuses
@@ -173,6 +184,16 @@ def run_collectors(ctx: ScanContext, collectors: tuple[Collector, ...]) -> RunRe
         try:
             produced = collector.collect(ctx.restarted())
             error = None
+        except CollectorPartial as exc:
+            # It got most of the way. Keep what it found, and report the gap
+            # exactly as a failure is reported — the scan is partial either way.
+            produced, error = list(exc.findings), f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "scan %s: collector %s finished partially: %s",
+                ctx.scan_id,
+                collector.name.value,
+                exc,
+            )
         except Exception as exc:  # noqa: BLE001 - survivability is the point
             # Deliberately broad. A collector is third-party-ish code over
             # attacker-influenced input; any exception it can raise must cost

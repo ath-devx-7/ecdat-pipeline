@@ -11,3 +11,6 @@
 
 # Shell scripts anywhere are run by a POSIX shell, on the host or in a container.
 *.sh text eol=lf
+
+# The committed ELF test fixture (backend/tests/data) is never text.
+*.elf binary
