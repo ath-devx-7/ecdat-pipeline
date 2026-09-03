@@ -49,7 +49,8 @@ def test_the_overview_shows_every_status_and_states_the_readiness_denominator(cl
     # All four, always — reporting only `recommended` hides the hard part (§11).
     assert set(overview["recommendation_counts"]) == {"recommended", "blocked", "no_path", "unknown"}
     assert overview["recommendation_counts"]["no_path"] == 0
-    assert set(overview["verdict_counts"]) == {"broken_now", "quantum_vulnerable", "quantum_safe", "hygiene", "unknown"}
+    # quantum_safe is kept in the store and hidden from every output by default.
+    assert set(overview["verdict_counts"]) == {"broken_now", "quantum_vulnerable", "hygiene", "unknown"}
     assert set(overview["wave_counts"]) == {"wave_0", "wave_1", "wave_2", "wave_3", "verify"}
 
     readiness = overview["readiness"]

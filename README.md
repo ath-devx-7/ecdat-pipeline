@@ -376,6 +376,7 @@ All settings are environment variables prefixed `ECDAT_`, or lines in `backend/.
 | `ECDAT_SEMGREP_MAX_MEMORY_MB` | `2000` | `--max-memory`. |
 | `ECDAT_SEMGREP_EXECUTABLE` | *(the one beside the interpreter, then `PATH`)* | Override. |
 | `ECDAT_WEASYPRINT_DLL_DIRECTORIES` | *(unset)* | Directory holding Pango/GObject DLLs when they are not on the loader path. |
+| `ECDAT_HIDE_QUANTUM_SAFE` | `true` | Keep `quantum_safe` findings in the store but out of the findings table, roadmap, CycloneDX export and report. The readiness percentage still counts them. |
 | `ECDAT_SURFACE_EXCLUDE_DIRS` | `[".git"]` | Directory names pruned from the surface scan, as a JSON list — e.g. `'[".git", "node_modules", ".venv"]'`. Excluding vendored dependencies hides any crypto they ship, so it is a choice, not the default. |
 
 ## Testing

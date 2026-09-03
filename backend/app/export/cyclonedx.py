@@ -54,6 +54,7 @@ from sqlalchemy.orm import Session
 
 from app.collectors.cbom_import import PROPERTY_CONFIDENCE, PROPERTY_SOURCE_LAYER
 from app.core.advisor import LIBRARY_OBSERVATIONS
+from app.core.visibility import hidden_verdicts
 from app.models.analysis import Recommendation, RiskScore, VerdictRow
 from app.models.enums import Confidence, Primitive
 from app.models.finding import Finding
@@ -365,7 +366,14 @@ def build_cbom(session: Session, scan: Scan) -> Bom:
     libraries: dict[tuple[str, str | None], list[Finding]] = defaultdict(list)
     excluded: Counter[str] = Counter()
 
+    hidden = hidden_verdicts()
     for finding in findings:
+        verdict = analysis.verdicts.get(finding.id)
+        if verdict is not None and verdict.verdict in hidden:
+            # Kept in the store, left out of the inventory that leaves the room
+            # (core/visibility.py). Counted, so the omission is on the record.
+            excluded[f"{verdict.verdict.value} (hidden by ECDAT_HIDE_QUANTUM_SAFE)"] += 1
+            continue
         if not _is_asset(finding):
             excluded[_observation(finding) or finding.algorithm_name] += 1
             continue

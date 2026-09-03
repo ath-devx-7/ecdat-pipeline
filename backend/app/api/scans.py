@@ -39,6 +39,7 @@ from app.intake.stage import StagingError, stage_source
 from app.intake.surface import FileCapExceeded, walk_surface
 from app.models.enums import RecommendationStatus, ScanMode, ScanStatus
 from app.models.scan import Scan, ScanFile
+from app.core.visibility import hidden_verdicts
 from app.export.cyclonedx import MEDIA_TYPE, export_cbom
 from app.export.pdf import ReportUnavailable, render_html, render_pdf
 from app.runner import analyse, run_scan
@@ -280,7 +281,9 @@ async def import_scan_cbom(
         component_count=result.component_count,
         finding_count=len(result.findings),
         skipped=list(result.skipped),
-        verdict_counts=_counts(row.verdict.value for row in analysis.verdicts),
+        verdict_counts=_counts(
+            row.verdict.value for row in analysis.verdicts if row.verdict not in hidden_verdicts()
+        ),
         alignment=analysis.alignment.as_dict(),
         wave_counts=_counts(row.wave.value for row in analysis.risk_scores),
         recommendation_counts={

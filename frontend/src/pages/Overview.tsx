@@ -130,7 +130,7 @@ export default function Overview() {
             {readiness.percent === null ? "—" : `${readiness.percent}%`}
           </div>
           <div className="mt-1 text-xs text-slate-600">
-            {readiness.quantum_safe} quantum-safe of {readiness.assessed} assessed
+            {readiness.assessed} findings assessed
             <br />
             {readiness.quantum_vulnerable} quantum-vulnerable · {readiness.broken_now} broken now
           </div>

@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from app.api.findings import _Loaded, _alignment_view, _readiness, policy_view
 from app.config import get_settings
 from app.core.policy_loader import PolicyPack, get_policy
+from app.core.visibility import hidden_verdicts, visible_verdict_keys
 from app.models.enums import RecommendationStatus, Verdict, Wave
 from app.models.scan import Scan
 
@@ -114,8 +115,11 @@ def report_context(session: Session, scan: Scan, policy: PolicyPack | None = Non
     alignment = _alignment_view(session, scan)
 
     rows: list[dict[str, Any]] = []
+    hidden = hidden_verdicts()
     for finding in loaded.findings:
         verdict = loaded.verdicts.get(finding.id)
+        if verdict is not None and verdict.verdict in hidden:
+            continue
         score = loaded.scores.get(finding.id)
         recommendations = loaded.recommendations.get(finding.id, [])
         rows.append(
@@ -172,9 +176,10 @@ def report_context(session: Session, scan: Scan, policy: PolicyPack | None = Non
                 citations[rec.source_citation] += 1
     pack_citations = sorted({rule.source for rule in pack.algorithms} | {target.source for target in pack.pqc_targets})
 
-    verdict_counts = {v.value: 0 for v in Verdict}
+    verdict_counts = {key: 0 for key in visible_verdict_keys()}
     for verdict in loaded.verdicts.values():
-        verdict_counts[verdict.verdict.value] += 1
+        if verdict.verdict.value in verdict_counts:
+            verdict_counts[verdict.verdict.value] += 1
     wave_counts = {wave: len(items) for wave, items in waves.items()}
     status_counts = {s.value: 0 for s in RecommendationStatus}
     for recs in loaded.recommendations.values():
@@ -185,7 +190,8 @@ def report_context(session: Session, scan: Scan, policy: PolicyPack | None = Non
         "scan": scan,
         "generated_at": datetime.now(timezone.utc),
         "policy": policy_view(pack),
-        "finding_count": len(loaded.findings),
+        "finding_count": len(loaded.all_findings),
+        "hidden_count": len(loaded.all_findings) - len(rows),
         "readiness": readiness,
         "verdict_counts": verdict_counts,
         "verdict_titles": VERDICT_TITLES,

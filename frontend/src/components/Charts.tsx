@@ -14,7 +14,9 @@ import {
 // statements, not gaps.
 
 export function VerdictChart({ counts }: { counts: Record<string, number> }) {
-  const data = VERDICTS.map((verdict: Verdict) => ({
+  // Only the verdicts the backend chose to show: quantum-safe rows are kept in
+  // the store but hidden from every output by default (ECDAT_HIDE_QUANTUM_SAFE).
+  const data = VERDICTS.filter((verdict: Verdict) => verdict in counts).map((verdict: Verdict) => ({
     key: verdict,
     name: VERDICT_LABEL[verdict],
     count: counts[verdict] ?? 0,

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.alignment import describe_alignment
 from app.core.policy_loader import PolicyPack, get_policy
 from app.core.risk import score_scan
+from app.core.visibility import hidden_verdicts, visible_only, visible_verdict_keys
 from app.db import get_session
 from app.models.analysis import Recommendation, RiskScore, VerdictRow
 from app.models.enums import (
@@ -137,6 +138,11 @@ class _Loaded:
             .order_by(Recommendation.id)
         ):
             self.recommendations.setdefault(row.finding_id, []).append(row)
+        #: every row, for the numbers that need the whole population (readiness)
+        self.all_findings: list[Finding] = list(self.findings)
+        #: what the user is shown — hidden verdicts removed (core/visibility.py)
+        self.findings = visible_only(self.all_findings, self.verdicts)
+        self.hidden_count = len(self.all_findings) - len(self.findings)
 
     def detail(self, finding: Finding) -> FindingDetail:
         verdict = self.verdicts.get(finding.id)
@@ -258,7 +264,11 @@ def get_overview(
         scan=ScanResponse.model_validate(scan),
         finding_count=len(loaded.findings),
         readiness=_readiness(loaded),
-        verdict_counts=_all_keys(Counter(r.verdict.value for r in loaded.verdicts.values()), Verdict),
+        verdict_counts={
+            key: count
+            for key, count in _all_keys(Counter(r.verdict.value for r in loaded.verdicts.values()), Verdict).items()
+            if key in visible_verdict_keys()
+        },
         wave_counts=_all_keys(Counter(r.wave.value for r in loaded.scores.values()), Wave),
         recommendation_counts=_all_keys(
             Counter(r.status.value for rows in loaded.recommendations.values() for r in rows),
@@ -319,7 +329,9 @@ def list_findings(
         selected.append(finding)
 
     facets = {
-        "verdict": sorted({r.verdict.value for r in loaded.verdicts.values()}),
+        "verdict": sorted(
+            {r.verdict.value for r in loaded.verdicts.values() if r.verdict not in hidden_verdicts()}
+        ),
         "wave": sorted({r.wave.value for r in loaded.scores.values()}),
         "collector": sorted({f.collector.value for f in loaded.findings}),
         "confidence": sorted({f.confidence.value for f in loaded.findings}),

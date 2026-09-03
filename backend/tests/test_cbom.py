@@ -368,7 +368,7 @@ def test_uploading_a_cbom_to_a_scan_reruns_the_analysis(client, demo_scan, db_se
     assert body["component_count"] == 10
     assert body["finding_count"] > 10
     assert body["skipped"] == []
-    assert body["verdict_counts"]["quantum_safe"] > 0
+    assert "quantum_safe" not in body["verdict_counts"]  # hidden from every output by default
     assert set(body["recommendation_counts"]) == {"recommended", "blocked", "no_path", "unknown"}
     assert body["alignment"]["status"] == "skipped"
 
@@ -494,7 +494,16 @@ def test_a_round_trip_preserves_algorithm_identities(client, demo_scan, db_sessi
             if is_algorithm(f)
         }
 
-    originals = db_session.scalars(sa.select(Finding).where(Finding.scan_id == original_id)).all()
+    from app.models.analysis import VerdictRow as _Verdict
+
+    safe_ids = {
+        row.finding_id
+        for row in db_session.scalars(sa.select(_Verdict).where(_Verdict.verdict == "quantum_safe"))
+    }
+    originals = [
+        f for f in db_session.scalars(sa.select(Finding).where(Finding.scan_id == original_id))
+        if f.id not in safe_ids  # hidden from the export by default, so not round-tripped
+    ]
     before = identities(originals)
     after = identities(result.findings)
 

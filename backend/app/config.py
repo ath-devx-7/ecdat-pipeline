@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     #: ``WEASYPRINT_DLL_DIRECTORIES``; unset means the platform default.
     weasyprint_dll_directories: str | None = None
 
+    #: Keep quantum_safe findings in the store but out of the findings table,
+    #: the roadmap, the CycloneDX export and the report. The readiness
+    #: percentage still counts them. See app/core/visibility.py.
+    hide_quantum_safe: bool = True
+
     #: Directory names pruned during the surface scan. `.git` holds packed
     #: objects that are not deployed artefacts and would consume the file cap
     #: before a single source file were offered for approval.

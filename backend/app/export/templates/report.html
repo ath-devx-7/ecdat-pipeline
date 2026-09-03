@@ -69,12 +69,12 @@
 {% endif %}
 <div class="tiles">
   <div class="tile"><div class="t">PQC readiness</div><div class="n">{% if readiness.percent is not none %}{{ readiness.percent }}%{% else %}—{% endif %}</div>
-    <div class="small">{{ readiness.quantum_safe }} quantum-safe of {{ readiness.assessed }} assessed · {{ readiness.unassessed }} unassessed excluded</div></div>
+    <div class="small">{{ readiness.assessed }} findings assessed · {{ readiness.unassessed }} unassessed excluded</div></div>
   {% for status in ["recommended", "blocked", "no_path", "unknown"] %}
   <div class="tile"><div class="t">{{ status_titles[status] }}</div><div class="n">{{ status_counts[status] }}</div></div>
   {% endfor %}
 </div>
-<p class="small muted">Readiness is quantum-safe findings over every finding the policy pack classified as safe, vulnerable or broken. Unassessed findings are excluded and counted beside it: "not assessed" is neither safe nor vulnerable. All four recommendation statuses are shown; reporting only the recommended ones would hide the hard part of the migration.</p>
+<p class="small muted">Readiness is the share of assessed findings the policy pack classified as quantum-safe. Unassessed findings are excluded and counted beside it: "not assessed" is neither safe nor vulnerable. All four recommendation statuses are shown; reporting only the recommended ones would hide the hard part of the migration.{% if hidden_count %} {{ hidden_count }} quantum-safe finding{{ "" if hidden_count == 1 else "s" }} {{ "is" if hidden_count == 1 else "are" }} kept in the store and not listed in this report.{% endif %}</p>
 
 <div class="two">
   <div>
