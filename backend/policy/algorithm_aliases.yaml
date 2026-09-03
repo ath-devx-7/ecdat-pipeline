@@ -1,6 +1,647 @@
-# Identity resolution table (SPEC.md §8). Maps every observed spelling of an
-# algorithm — name variants and OIDs — onto one canonical family + OID, so the
-# dashboard does not count SHA-1, sha1 and 1.3.14.3.2.26 as three algorithms.
+# Identity resolution table — SPEC.md §8, build step 5.
 #
-# Populated in build step 5 (normalizer). Empty until then.
-aliases: {}
+# Maps every observed spelling of an algorithm onto one canonical identity, so
+# the dashboard does not count SHA-1, sha1, SHA1withRSA and 1.3.14.3.2.26 as four
+# algorithms. Read-only at runtime like the rest of the pack; every entry carries
+# a `source` citation and the normalizer refuses to build its index without one.
+#
+# ENTRY SHAPE
+#
+#   <entry id>:
+#     family:     the canonical family written to findings.algorithm_family
+#     oid:        the canonical OID for THIS spelling (optional)
+#     primitive:  a DEFAULT only — a collector that observed the primitive wins
+#     key_size:   implied by the name, e.g. aes256-ctr (optional)
+#     mode:       implied by the name, e.g. aes128-cbc (optional)
+#     protocol_version: canonical form for protocol entries, e.g. "1.2"
+#     components: other families this one spelling also names (recorded as
+#                 evidence, never as a second finding — see below)
+#     source:     citation for the mapping. Required.
+#     names:      observed spellings. Matched case-insensitively with separators
+#                 ignored, so `SHA-1`, `SHA1` and `sha1` are one key; the variants
+#                 are listed anyway because this file documents what was observed.
+#     oids:       additional OIDs resolving to this entry (`oid` is included
+#                 automatically and need not be repeated here).
+#
+# TWO DECISIONS THAT SHAPE THE WHOLE FILE
+#
+# 1. `family` is the collapsing identity; `oid` is the precise one.
+#    `sha1WithRSAEncryption` collapses to family SHA-1 — that is §8's requirement
+#    — but keeps its own OID 1.2.840.113549.1.1.5 rather than being rewritten to
+#    the bare SHA-1 OID. Counting is done on family; tracing is done on OID, and
+#    rewriting an observed OID into a different one would break the trace.
+#
+# 2. A composite name resolves to the family the observation is ABOUT, with the
+#    rest recorded in `components`.
+#    An X.509 signature algorithm resolves to its hash (`sha1WithRSAEncryption`
+#    → SHA-1), because the certificate's key is already a separate finding from
+#    the same collector and the hash is the part nothing else records. An SSH
+#    HostKeyAlgorithms entry resolves to its key (`ssh-rsa` → RSA), because
+#    nothing else records the key there and RSA is the quantum-vulnerable half.
+#    Neither case invents a second finding: one observation, one row, the other
+#    families listed in `components` so nothing is lost.
+#
+# WHAT IS DELIBERATELY ABSENT
+#
+# * TLS 1.2 cipher suites resolve to the SUITE, not to a component algorithm.
+#   `ECDHE-RSA-AES128-GCM-SHA256` bundles a key exchange, an authentication
+#   algorithm, a cipher and a MAC; calling it "AES" would report a suite whose
+#   key exchange is quantum-vulnerable as quantum-safe. The pack has no rule for
+#   suites, so these resolve to `unknown` — which demo/README.md lists as a known
+#   gap, closable by a policy-pack edit with a citation rather than by code.
+#   TLS 1.3 suites are different and ARE resolved: they name one AEAD and one
+#   hash, with the key exchange negotiated separately, so nothing is hidden.
+#
+# * Hygiene markers (`private-key-file`, `certificate-expired`,
+#   `tls-certificate-path`, …) are not listed. They are not algorithms. The
+#   normalizer falls back to the observed name as the family and records
+#   `identity_resolved: false`, which keeps them countable without pretending
+#   this table knows them.
+#
+# * SSL 2.0 and SSL 3.0 carry family SSL, not TLS. `algorithms.yaml` compares
+#   protocol versions numerically (`protocol_version_lt: "1.2"`), and "3.0" is
+#   not less than "1.2" — filing SSL under TLS would return `quantum_safe`-shaped
+#   silence for the oldest protocol in the file. Under family SSL it resolves to
+#   `unknown` until the pack gains a cited SSL rule. Unknown is the honest answer;
+#   a wrong one is not.
+
+aliases:
+
+  # ------------------------------------------------------------------------- #
+  # Hashes
+  # ------------------------------------------------------------------------- #
+
+  md5:
+    family: MD5
+    primitive: hash
+    oid: "1.2.840.113549.2.5"
+    source: "RFC 3370 §2.1"
+    names: [MD5, md5, hashlib.md5, MD5Digest, hmac-md5, HmacMD5, MD5-96, hmac-md5-96]
+
+  md2:
+    family: MD2
+    primitive: hash
+    oid: "1.2.840.113549.2.2"
+    source: "RFC 3279 §2.2.1"
+    names: [MD2, md2]
+
+  sha-1:
+    family: SHA-1
+    primitive: hash
+    oid: "1.3.14.3.2.26"
+    source: "RFC 3279 §2.2.1"
+    names:
+      [SHA-1, SHA1, sha1, hashlib.sha1, SHA-1-96, hmac-sha1, hmac-sha1-96, HmacSHA1]
+
+  sha-256:
+    family: SHA-256
+    primitive: hash
+    oid: "2.16.840.1.101.3.4.2.1"
+    source: "RFC 5754 §2"
+    names: [SHA-256, SHA256, sha256, hashlib.sha256, hmac-sha2-256, HmacSHA256, SHA2-256]
+
+  sha-384:
+    family: SHA-384
+    primitive: hash
+    oid: "2.16.840.1.101.3.4.2.2"
+    source: "RFC 5754 §2"
+    names: [SHA-384, SHA384, sha384, hmac-sha2-384, HmacSHA384, SHA2-384]
+
+  sha-512:
+    family: SHA-512
+    primitive: hash
+    oid: "2.16.840.1.101.3.4.2.3"
+    source: "RFC 5754 §2"
+    names: [SHA-512, SHA512, sha512, hmac-sha2-512, HmacSHA512, SHA2-512]
+
+  sha-224:
+    family: SHA-224
+    primitive: hash
+    oid: "2.16.840.1.101.3.4.2.4"
+    source: "RFC 5754 §2"
+    names: [SHA-224, SHA224, sha224]
+
+  # ------------------------------------------------------------------------- #
+  # X.509 signature algorithms — hash is the family, key is a component
+  # ------------------------------------------------------------------------- #
+
+  md5-with-rsa:
+    family: MD5
+    primitive: signature
+    oid: "1.2.840.113549.1.1.4"
+    components: [RSA]
+    source: "RFC 3279 §2.2.1"
+    names: [md5WithRSAEncryption, MD5withRSA, MD5WithRSA]
+
+  sha1-with-rsa:
+    family: SHA-1
+    primitive: signature
+    oid: "1.2.840.113549.1.1.5"
+    components: [RSA]
+    source: "RFC 3279 §2.2.1"
+    names: [sha1WithRSAEncryption, SHA1withRSA, SHA1WithRSA, SHA1withRSAEncryption]
+
+  sha256-with-rsa:
+    family: SHA-256
+    primitive: signature
+    oid: "1.2.840.113549.1.1.11"
+    components: [RSA]
+    source: "RFC 4055 §5"
+    names: [sha256WithRSAEncryption, SHA256withRSA, SHA256WithRSA]
+
+  sha384-with-rsa:
+    family: SHA-384
+    primitive: signature
+    oid: "1.2.840.113549.1.1.12"
+    components: [RSA]
+    source: "RFC 4055 §5"
+    names: [sha384WithRSAEncryption, SHA384withRSA]
+
+  sha512-with-rsa:
+    family: SHA-512
+    primitive: signature
+    oid: "1.2.840.113549.1.1.13"
+    components: [RSA]
+    source: "RFC 4055 §5"
+    names: [sha512WithRSAEncryption, SHA512withRSA]
+
+  rsassa-pss:
+    family: RSA
+    primitive: signature
+    oid: "1.2.840.113549.1.1.10"
+    source: "RFC 4055 §3.1"
+    # The digest sits in the algorithm parameters, not in the OID, so this one
+    # resolves to RSA rather than to a hash: the spelling does not name one.
+    names: [RSASSA-PSS, rsassaPss, id-RSASSA-PSS, RSAPSS]
+
+  dsa-with-sha1:
+    family: SHA-1
+    primitive: signature
+    oid: "1.2.840.10040.4.3"
+    components: [DSA]
+    source: "RFC 3279 §2.2.2"
+    names: [dsa-with-sha1, dsaWithSHA1, SHA1withDSA, id-dsa-with-sha1]
+
+  dsa-with-sha256:
+    family: SHA-256
+    primitive: signature
+    oid: "2.16.840.1.101.3.4.3.2"
+    components: [DSA]
+    source: "RFC 5758 §3.1"
+    names: [dsa-with-sha256, SHA256withDSA, id-dsa-with-sha256]
+
+  ecdsa-with-sha1:
+    family: SHA-1
+    primitive: signature
+    oid: "1.2.840.10045.4.1"
+    components: [ECDSA]
+    source: "RFC 3279 §2.2.3"
+    names: [ecdsa-with-SHA1, ecdsaWithSHA1, SHA1withECDSA]
+
+  ecdsa-with-sha256:
+    family: SHA-256
+    primitive: signature
+    oid: "1.2.840.10045.4.3.2"
+    components: [ECDSA]
+    source: "RFC 5758 §3.2"
+    names: [ecdsa-with-SHA256, SHA256withECDSA]
+
+  ecdsa-with-sha384:
+    family: SHA-384
+    primitive: signature
+    oid: "1.2.840.10045.4.3.3"
+    components: [ECDSA]
+    source: "RFC 5758 §3.2"
+    names: [ecdsa-with-SHA384, SHA384withECDSA]
+
+  ecdsa-with-sha512:
+    family: SHA-512
+    primitive: signature
+    oid: "1.2.840.10045.4.3.4"
+    components: [ECDSA]
+    source: "RFC 5758 §3.2"
+    names: [ecdsa-with-SHA512, SHA512withECDSA]
+
+  # ------------------------------------------------------------------------- #
+  # Public-key algorithms
+  #
+  # RSA carries no default primitive on purpose. It signs and it transports keys,
+  # only the use distinguishes them, and step 10 picks ML-DSA or ML-KEM off that
+  # one field. A default here would be a guess with a wrong answer attached.
+  # ------------------------------------------------------------------------- #
+
+  rsa:
+    family: RSA
+    oid: "1.2.840.113549.1.1.1"
+    source: "RFC 3279 §2.3.1"
+    names: [RSA, rsaEncryption, RSAPublicKey, rsa, RSA-PKCS1, PKCS1]
+
+  ssh-rsa:
+    family: RSA
+    primitive: signature
+    components: [SHA-1]
+    source: "RFC 4253 §6.6"
+    # The key is what matters and what nothing else in an sshd_config records.
+    # The SHA-1 half is why OpenSSH 8.8 disabled it by default, hence the
+    # component: the row says RSA, the evidence says RSA-with-SHA-1.
+    names: [ssh-rsa]
+
+  rsa-sha2-256:
+    family: RSA
+    primitive: signature
+    components: [SHA-256]
+    source: "RFC 8332 §3"
+    names: [rsa-sha2-256]
+
+  rsa-sha2-512:
+    family: RSA
+    primitive: signature
+    components: [SHA-512]
+    source: "RFC 8332 §3"
+    names: [rsa-sha2-512]
+
+  dsa:
+    family: DSA
+    primitive: signature
+    oid: "1.2.840.10040.4.1"
+    source: "RFC 3279 §2.3.2"
+    names: [DSA, id-dsa, ssh-dss, DSAPublicKey]
+
+  ecdsa:
+    family: ECDSA
+    primitive: signature
+    source: "RFC 5656 §6.2"
+    # No canonical OID: an EC key is published under id-ecPublicKey
+    # (1.2.840.10045.2.1), which is shared with ECDH — the SubjectPublicKeyInfo
+    # does not say which of the two the key is for. Recording it here would
+    # assert a distinction the artefact never made.
+    names:
+      [ECDSA, ecdsa, EC, ECPublicKey, ecdsa-sha2-nistp256, ecdsa-sha2-nistp384,
+       ecdsa-sha2-nistp521]
+
+  ed25519:
+    family: EdDSA
+    primitive: signature
+    oid: "1.3.101.112"
+    source: "RFC 8410 §3"
+    names: [Ed25519, ed25519, ssh-ed25519, id-Ed25519, EdDSA]
+
+  ed448:
+    family: EdDSA
+    primitive: signature
+    oid: "1.3.101.113"
+    source: "RFC 8410 §3"
+    names: [Ed448, ed448, ssh-ed448, id-Ed448]
+
+  # ------------------------------------------------------------------------- #
+  # Key agreement
+  # ------------------------------------------------------------------------- #
+
+  dh:
+    family: DH
+    primitive: key_exchange
+    oid: "1.2.840.10046.2.1"
+    source: "RFC 3279 §2.3.3"
+    oids: ["1.2.840.113549.1.3.1"]
+    names: [DH, DHE, diffie-hellman, DiffieHellman, dhpublicnumber, dhKeyAgreement]
+
+  dh-group1-sha1:
+    family: DH
+    primitive: key_exchange
+    key_size: 1024
+    components: [SHA-1]
+    source: "RFC 4253 §8.1"
+    names: [diffie-hellman-group1-sha1]
+
+  dh-group14-sha1:
+    family: DH
+    primitive: key_exchange
+    key_size: 2048
+    components: [SHA-1]
+    source: "RFC 4253 §8.2"
+    names: [diffie-hellman-group14-sha1]
+
+  dh-group14-sha256:
+    family: DH
+    primitive: key_exchange
+    key_size: 2048
+    components: [SHA-256]
+    source: "RFC 8268 §3"
+    names: [diffie-hellman-group14-sha256]
+
+  dh-group-exchange-sha256:
+    family: DH
+    primitive: key_exchange
+    components: [SHA-256]
+    source: "RFC 4419 §4.2"
+    names: [diffie-hellman-group-exchange-sha256, diffie-hellman-group-exchange-sha1]
+
+  ecdh:
+    family: ECDH
+    primitive: key_exchange
+    source: "RFC 8422 §5.1"
+    names: [ECDH, ECDHE, ecdh, EECDH]
+
+  ecdh-sha2-nistp256:
+    family: ECDH
+    primitive: key_exchange
+    key_size: 256
+    components: [SHA-256]
+    source: "RFC 5656 §10.1"
+    names: [ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521]
+
+  x25519:
+    family: ECDH
+    primitive: key_exchange
+    key_size: 256
+    source: "RFC 7748 §5"
+    # Curve25519 Diffie-Hellman. Filed under ECDH because that is what it is —
+    # which is also what makes `ecc-quantum` fire on the clean host's negotiated
+    # group, the finding demo/README.md §B exists to produce.
+    names: [X25519, x25519, curve25519, curve25519-sha256, "curve25519-sha256@libssh.org"]
+
+  x448:
+    family: ECDH
+    primitive: key_exchange
+    key_size: 448
+    source: "RFC 7748 §5"
+    names: [X448, x448]
+
+  # ------------------------------------------------------------------------- #
+  # Symmetric ciphers
+  # ------------------------------------------------------------------------- #
+
+  aes:
+    family: AES
+    primitive: cipher
+    source: "FIPS 197"
+    names: [AES, aes, algorithms.AES, AESEngine, Rijndael]
+
+  aes-128:
+    family: AES
+    primitive: cipher
+    key_size: 128
+    source: "FIPS 197"
+    names: [AES-128, AES128, aes128]
+
+  aes-192:
+    family: AES
+    primitive: cipher
+    key_size: 192
+    source: "FIPS 197"
+    names: [AES-192, AES192, aes192]
+
+  aes-256:
+    family: AES
+    primitive: cipher
+    key_size: 256
+    source: "FIPS 197"
+    names: [AES-256, AES256, aes256]
+
+  aes-128-cbc:
+    family: AES
+    primitive: cipher
+    key_size: 128
+    mode: CBC
+    oid: "2.16.840.1.101.3.4.1.2"
+    source: "RFC 3565 §4.1"
+    names: [AES-128-CBC, aes128-cbc, AES128-CBC, "AES/CBC/128"]
+
+  aes-192-cbc:
+    family: AES
+    primitive: cipher
+    key_size: 192
+    mode: CBC
+    oid: "2.16.840.1.101.3.4.1.22"
+    source: "RFC 3565 §4.1"
+    names: [AES-192-CBC, aes192-cbc]
+
+  aes-256-cbc:
+    family: AES
+    primitive: cipher
+    key_size: 256
+    mode: CBC
+    oid: "2.16.840.1.101.3.4.1.42"
+    source: "RFC 3565 §4.1"
+    names: [AES-256-CBC, aes256-cbc, AES256-CBC]
+
+  aes-128-gcm:
+    family: AES
+    primitive: cipher
+    key_size: 128
+    mode: GCM
+    oid: "2.16.840.1.101.3.4.1.6"
+    source: "RFC 5084 §3.2"
+    names: [AES-128-GCM, aes128-gcm, "aes128-gcm@openssh.com"]
+
+  aes-256-gcm:
+    family: AES
+    primitive: cipher
+    key_size: 256
+    mode: GCM
+    oid: "2.16.840.1.101.3.4.1.46"
+    source: "RFC 5084 §3.2"
+    names: [AES-256-GCM, aes256-gcm, "aes256-gcm@openssh.com"]
+
+  aes-128-ctr:
+    family: AES
+    primitive: cipher
+    key_size: 128
+    mode: CTR
+    source: "RFC 4344 §4"
+    names: [AES-128-CTR, aes128-ctr]
+
+  aes-256-ctr:
+    family: AES
+    primitive: cipher
+    key_size: 256
+    mode: CTR
+    source: "RFC 4344 §4"
+    names: [AES-256-CTR, aes256-ctr]
+
+  des:
+    family: DES
+    primitive: cipher
+    key_size: 56
+    source: "NIST SP 800-131A Rev.2 §3"
+    names: [DES, des, algorithms.DES]
+
+  des-cbc:
+    family: DES
+    primitive: cipher
+    key_size: 56
+    mode: CBC
+    source: "NIST SP 800-131A Rev.2 §3"
+    names: [DES-CBC, des-cbc]
+
+  des-ecb:
+    family: DES
+    primitive: cipher
+    key_size: 56
+    mode: ECB
+    source: "NIST SP 800-131A Rev.2 §3"
+    names: [DES-ECB, des-ecb, "DES/ECB/PKCS5Padding"]
+
+  triple-des:
+    family: 3DES
+    primitive: cipher
+    key_size: 168
+    source: "NIST SP 800-67 Rev.2"
+    names:
+      [3DES, TripleDES, DESede, DES-EDE3, DES-EDE3-CBC, 3des-cbc, DES-CBC3,
+       algorithms.TripleDES]
+
+  rc4:
+    family: RC4
+    primitive: cipher
+    source: "RFC 7465"
+    names: [RC4, ARC4, ARCFOUR, arcfour, arcfour128, arcfour256, algorithms.ARC4]
+
+  chacha20:
+    family: ChaCha20
+    primitive: cipher
+    key_size: 256
+    source: "RFC 8439"
+    names: [ChaCha20, CHACHA20, chacha20, "chacha20-poly1305@openssh.com", ChaCha20Poly1305]
+
+  # ------------------------------------------------------------------------- #
+  # Protocol versions
+  #
+  # `protocol_version` is canonicalised to a bare number so `algorithms.yaml`'s
+  # `protocol_version_lt` condition compares like with like. See the header note
+  # on why SSL is a separate family rather than TLS with a bigger number.
+  # ------------------------------------------------------------------------- #
+
+  tls-1.0:
+    family: TLS
+    primitive: protocol
+    protocol_version: "1.0"
+    source: "RFC 2246"
+    names: [TLSv1, TLSv1.0, TLS 1.0, TLS1.0, TLSv1_0, tlsv1, TLS_1_0]
+
+  tls-1.1:
+    family: TLS
+    primitive: protocol
+    protocol_version: "1.1"
+    source: "RFC 4346"
+    names: [TLSv1.1, TLS 1.1, TLS1.1, TLSv1_1, TLS_1_1]
+
+  tls-1.2:
+    family: TLS
+    primitive: protocol
+    protocol_version: "1.2"
+    source: "RFC 5246"
+    names: [TLSv1.2, TLS 1.2, TLS1.2, TLSv1_2, TLS_1_2]
+
+  tls-1.3:
+    family: TLS
+    primitive: protocol
+    protocol_version: "1.3"
+    source: "RFC 8446"
+    names: [TLSv1.3, TLS 1.3, TLS1.3, TLSv1_3, TLS_1_3]
+
+  ssl-3.0:
+    family: SSL
+    primitive: protocol
+    protocol_version: "3.0"
+    source: "RFC 6101"
+    names: [SSLv3, SSLv3.0, SSL 3.0, SSL3, SSLv3_0]
+
+  ssl-2.0:
+    family: SSL
+    primitive: protocol
+    protocol_version: "2.0"
+    source: "RFC 6176"
+    names: [SSLv2, SSLv2.0, SSL 2.0, SSL2]
+
+  # ------------------------------------------------------------------------- #
+  # TLS 1.3 cipher suites — one AEAD and one hash, key exchange negotiated
+  # separately, so resolving them to the cipher hides nothing.
+  # ------------------------------------------------------------------------- #
+
+  tls13-aes-128-gcm:
+    family: AES
+    primitive: cipher
+    key_size: 128
+    mode: GCM
+    components: [SHA-256]
+    source: "RFC 8446 §B.4"
+    names: [TLS_AES_128_GCM_SHA256]
+
+  tls13-aes-256-gcm:
+    family: AES
+    primitive: cipher
+    key_size: 256
+    mode: GCM
+    components: [SHA-384]
+    source: "RFC 8446 §B.4"
+    names: [TLS_AES_256_GCM_SHA384]
+
+  tls13-chacha20-poly1305:
+    family: ChaCha20
+    primitive: cipher
+    key_size: 256
+    components: [Poly1305, SHA-256]
+    source: "RFC 8446 §B.4"
+    names: [TLS_CHACHA20_POLY1305_SHA256]
+
+  tls13-aes-128-ccm:
+    family: AES
+    primitive: cipher
+    key_size: 128
+    mode: CCM
+    components: [SHA-256]
+    source: "RFC 8446 §B.4"
+    names: [TLS_AES_128_CCM_SHA256, TLS_AES_128_CCM_8_SHA256]
+
+  # ------------------------------------------------------------------------- #
+  # TLS 1.2 and earlier cipher suites
+  #
+  # The family is the suite's IANA name, which is the identity two spellings of
+  # one suite share: nginx writes `DES-CBC3-SHA`, sslyze reports
+  # `TLS_RSA_WITH_3DES_EDE_CBC_SHA`, and collapsing them is exactly what §8 asks
+  # for. `components` records what the suite bundles; no rule in the pack matches
+  # a suite, so these resolve to `unknown` by design (demo/README.md, gaps).
+  # ------------------------------------------------------------------------- #
+
+  tls-rsa-aes128-cbc-sha:
+    family: TLS_RSA_WITH_AES_128_CBC_SHA
+    primitive: cipher
+    components: [RSA, AES, SHA-1]
+    source: "IANA TLS Cipher Suite Registry (0x00,0x2F)"
+    names: [AES128-SHA, TLS_RSA_WITH_AES_128_CBC_SHA]
+
+  tls-rsa-aes256-cbc-sha:
+    family: TLS_RSA_WITH_AES_256_CBC_SHA
+    primitive: cipher
+    components: [RSA, AES, SHA-1]
+    source: "IANA TLS Cipher Suite Registry (0x00,0x35)"
+    names: [AES256-SHA, TLS_RSA_WITH_AES_256_CBC_SHA]
+
+  tls-rsa-aes128-cbc-sha256:
+    family: TLS_RSA_WITH_AES_128_CBC_SHA256
+    primitive: cipher
+    components: [RSA, AES, SHA-256]
+    source: "IANA TLS Cipher Suite Registry (0x00,0x3C)"
+    names: [AES128-SHA256, TLS_RSA_WITH_AES_128_CBC_SHA256]
+
+  tls-rsa-3des-ede-cbc-sha:
+    family: TLS_RSA_WITH_3DES_EDE_CBC_SHA
+    primitive: cipher
+    components: [RSA, 3DES, SHA-1]
+    source: "IANA TLS Cipher Suite Registry (0x00,0x0A)"
+    names: [DES-CBC3-SHA, TLS_RSA_WITH_3DES_EDE_CBC_SHA]
+
+  tls-ecdhe-rsa-aes128-gcm-sha256:
+    family: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+    primitive: cipher
+    components: [ECDH, RSA, AES, SHA-256]
+    source: "IANA TLS Cipher Suite Registry (0xC0,0x2F)"
+    names: [ECDHE-RSA-AES128-GCM-SHA256, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256]
+
+  tls-ecdhe-rsa-aes256-gcm-sha384:
+    family: TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    primitive: cipher
+    components: [ECDH, RSA, AES, SHA-384]
+    source: "IANA TLS Cipher Suite Registry (0xC0,0x30)"
+    names: [ECDHE-RSA-AES256-GCM-SHA384, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384]

@@ -11,9 +11,10 @@ staging and enumeration, approval through the collector run. That is a deliberat
 prototype simplification, guarded by the file cap, the probe-target cap and the
 per-collector timeout enforced here and in ``app/runner.py``.
 
-Build step 4 runs the certificate and config collectors on approval. Their output
-is returned as counts and goes no further: writing ``findings`` rows is the
-normalizer's job in step 5.
+Approval runs the collectors and, from build step 5, the normalizer that writes
+their output into ``findings``. ``finding_count`` in the response is the number of
+observations, which is also the number of rows stored: normalization resolves
+identities, it does not merge or drop observations.
 """
 
 from __future__ import annotations

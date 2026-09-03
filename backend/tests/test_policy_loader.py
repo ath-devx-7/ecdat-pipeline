@@ -31,8 +31,10 @@ def test_shipped_policy_pack_loads(shipped_policy_dir: Path) -> None:
     assert len(pack.algorithms) == 8
     assert len(pack.pqc_targets) == 5
     assert pack.prefer_hybrid is True
-    # Populated in later build steps; they must still load as empty mappings.
-    assert dict(pack.aliases) == {}
+    # The alias table arrived with the normalizer in step 5; its own validation
+    # lives in tests/test_normalizer.py, since the loader only has to hand it
+    # over as a mapping. Named groups are still step 7's to populate.
+    assert dict(pack.aliases)
     assert dict(pack.named_groups) == {}
 
 

@@ -17,15 +17,18 @@ The loop below is deliberately dull: ``for collector in collectors`` with the
 results appended. SPEC.md §2 names Celery workers as the production path, and
 swapping this loop for a queue must not require touching a single collector.
 
-Findings are returned, not stored. Writing ``findings`` rows is the normalizer's
-job (§8, build step 5), and it is the only thing that stands between this runner
-and a populated database.
+**Collecting and storing are separate.** :func:`run_collectors` observes and
+returns; :func:`run_scan` hands what it observed to the normalizer (§8), which is
+the only thing in the system that writes ``findings`` rows. The split is why a
+collector can be tested without a database and why the store has exactly one
+door. Steps 6 to 10 hang their stages off ``run_scan`` in §4's order — alignment
+before the policy engine, then the advisor and the risk scorer.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from time import monotonic
 
@@ -35,6 +38,7 @@ from app.collectors.base import Collector, RawFinding, ScanContext
 from app.collectors.certs import CertificateCollector
 from app.collectors.config import ConfigCollector
 from app.config import Settings, get_settings
+from app.core.normalizer import normalize
 from app.intake.selection import approved_paths
 from app.intake.stage import work_dir_for
 from app.models.enums import CollectorName, ScanMode, ScanStatus
@@ -78,6 +82,10 @@ class CollectorRun:
 class RunResult:
     findings: tuple[RawFinding, ...]
     runs: tuple[CollectorRun, ...]
+    #: ``findings`` rows written by the normalizer. One per observation — it
+    #: renames, it does not merge — so this equals ``len(findings)`` after a
+    #: stored run and stays 0 for :func:`run_collectors`, which never stores.
+    stored_count: int = 0
 
     @property
     def failures(self) -> tuple[CollectorRun, ...]:
@@ -159,26 +167,30 @@ def run_collectors(ctx: ScanContext, collectors: tuple[Collector, ...]) -> RunRe
 
 
 def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> RunResult:
-    """Run every collector this scan's mode calls for and stamp the outcome.
+    """Run every collector this scan's mode calls for, store the result, stamp the scan.
 
-    Step 5 pipes ``result.findings`` through the normalizer into the ``findings``
-    table on the way out of here; today they go no further than the response.
+    The normalizer runs even when a collector failed. A ``partial`` scan is one
+    whose findings are incomplete, not one whose findings are unavailable, and
+    throwing away what did come back would turn a gap into a blackout.
     """
     settings = settings or get_settings()
     scan.status = ScanStatus.RUNNING
     session.flush()
 
     result = run_collectors(build_context(session, scan, settings), collectors_for(scan.mode))
+    stored = normalize(session, scan.id, result.findings)
+    result = dataclass_replace(result, stored_count=len(stored))
 
     scan.status = result.status
     scan.completed_at = datetime.now(timezone.utc)
     session.flush()
 
     logger.info(
-        "scan %s finished %s: %d raw finding(s) from %d collector(s)",
+        "scan %s finished %s: %d raw finding(s) from %d collector(s), %d stored",
         scan.id,
         scan.status.value,
         len(result.findings),
         len(result.runs),
+        result.stored_count,
     )
     return result

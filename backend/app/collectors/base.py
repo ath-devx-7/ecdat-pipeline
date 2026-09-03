@@ -13,6 +13,10 @@ the policy engine (§10) and canonical algorithm identities from the normalizer
 * ``primitive`` is set only where the observation itself carries it: an SSH
   ``KexAlgorithms`` line is key exchange because that is what the directive
   means. Where the artefact does not say, it stays ``unknown``.
+* ``source_layer`` and ``confidence`` left at ``None`` mean "§7's default for
+  this collector", which the normalizer applies from one table (§8). Every
+  collector in the tree states both; the option exists so an importer taking
+  them from someone else's document does not have to invent one.
 
 Two properties are enforced here rather than trusted to each collector:
 
@@ -64,8 +68,13 @@ class RawFinding:
     collector: CollectorName
     #: exactly as the artefact spells it: ``sha1WithRSAEncryption``, ``TLSv1``
     algorithm_name: str
-    source_layer: SourceLayer
-    confidence: Confidence = Confidence.HIGH
+    #: ``None`` means "this collector's usual layer" — the normalizer fills it
+    #: from ``COLLECTOR_SOURCE_LAYER`` (§8). Every collector here states its own.
+    source_layer: SourceLayer | None = None
+    #: ``None`` means "§7's default for this collector", applied by the
+    #: normalizer. Stating it is how a collector reports that *this* observation
+    #: is weaker than its usual — a ``.rodata`` string against a linked symbol.
+    confidence: Confidence | None = None
     #: only when the artefact carries one — a certificate does, a config file does not
     algorithm_oid: str | None = None
     primitive: Primitive = Primitive.UNKNOWN

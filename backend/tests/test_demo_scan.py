@@ -9,6 +9,10 @@ What is asserted here is only what the *committed* part of the tree guarantees.
 certificate assertions run when it exists and are skipped when it does not —
 which is honest, and is why ``tests/test_collectors_certs.py`` carries its own
 committed copy of the weak certificate rather than depending on this.
+
+The ``demo_scan`` fixture lives in ``conftest.py``: from step 5 the normalizer
+test needs the same scan, and two modules building it two ways would eventually
+be two different scans.
 """
 
 from __future__ import annotations
@@ -18,42 +22,6 @@ from pathlib import Path
 import pytest
 
 from app.models.enums import CollectorName
-
-
-def approve_everything(client, scan_id: str) -> dict:
-    tree = client.get(f"/api/scans/{scan_id}/files")
-    assert tree.status_code == 200, tree.text
-
-    paths: list[str] = []
-
-    def walk(node: dict) -> None:
-        for child in node["children"]:
-            if child["type"] == "file":
-                paths.append(child["path"])
-            else:
-                walk(child)
-
-    walk(tree.json()["root"])
-    response = client.post(f"/api/scans/{scan_id}/approve", json={"paths": paths})
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-@pytest.fixture
-def demo_scan(client, demo_dir: Path) -> dict:
-    created = client.post(
-        "/api/scans",
-        json={
-            "mode": "files",
-            "source_type": "folder",
-            "source_ref": str(demo_dir),
-            # demo/README.md: at X=20 the Mosca inequality actually bites, which
-            # is what makes wave_1 and wave_2 populate in step 9.
-            "data_lifetime_years": 20,
-        },
-    )
-    assert created.status_code == 201, created.text
-    return approve_everything(client, created.json()["id"])
 
 
 def test_a_demo_scan_produces_findings_from_both_collectors(demo_scan) -> None:

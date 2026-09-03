@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from app.config import Settings, get_settings
+from app.core.normalizer import get_alias_index
 from app.core.policy_loader import PolicyPack, get_policy
 
 logger = logging.getLogger(__name__)
@@ -21,14 +22,21 @@ def initialise() -> tuple[Settings, PolicyPack]:
     """Load settings and the policy pack. Raises ``PolicyError`` if the pack is bad."""
     settings = get_settings()
     policy = get_policy()
+    # Built here rather than on first scan: a duplicate spelling or a missing
+    # citation in the alias table is a pack defect, and a pack defect stops the
+    # process at startup like every other one (§6).
+    aliases = get_alias_index(policy)
 
     logger.info(
-        "policy pack %s loaded from %s (published %s, %d algorithm rules, %d PQC targets)",
+        "policy pack %s loaded from %s (published %s, %d algorithm rules, %d PQC targets, "
+        "%d alias entries over %d spellings)",
         policy.version.version,
         policy.policy_dir,
         policy.version.published.isoformat(),
         len(policy.algorithms),
         len(policy.pqc_targets),
+        len(aliases.entries),
+        len(aliases.by_name),
     )
     if policy.version.is_stale():
         logger.warning(

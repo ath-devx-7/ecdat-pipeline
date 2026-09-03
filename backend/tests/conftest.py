@@ -124,6 +124,56 @@ def client(db_session: Session) -> Iterator[TestClient]:
 
 
 @pytest.fixture
+def approve_all_files(client: TestClient):
+    """Approve every file the surface scan listed, and return the approval response.
+
+    The approval body is the whole point of the gate, so it is built from what
+    ``GET /files`` actually returned rather than from a directory walk: a file the
+    API never offered can never be approved by a test either.
+    """
+
+    def _approve(scan_id: str) -> dict:
+        tree = client.get(f"/api/scans/{scan_id}/files")
+        assert tree.status_code == 200, tree.text
+
+        paths: list[str] = []
+
+        def walk(node: dict) -> None:
+            for child in node["children"]:
+                if child["type"] == "file":
+                    paths.append(child["path"])
+                else:
+                    walk(child)
+
+        walk(tree.json()["root"])
+        response = client.post(f"/api/scans/{scan_id}/approve", json={"paths": paths})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    return _approve
+
+
+@pytest.fixture
+def demo_scan(client: TestClient, demo_dir: Path, approve_all_files) -> dict:
+    """A completed ``files`` scan of ``demo/``, approved in full.
+
+    ``data_lifetime_years = 20`` per demo/README.md: at X=20 the Mosca inequality
+    actually bites, which is what makes wave_1 and wave_2 populate in step 9.
+    """
+    created = client.post(
+        "/api/scans",
+        json={
+            "mode": "files",
+            "source_type": "folder",
+            "source_ref": str(demo_dir),
+            "data_lifetime_years": 20,
+        },
+    )
+    assert created.status_code == 201, created.text
+    return approve_all_files(created.json()["id"])
+
+
+@pytest.fixture
 def source_folder(tmp_path: Path):
     """Make a scannable folder holding ``count`` files across a couple of levels."""
 

@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ECDAT",
     description=DESCRIPTION,
-    version="0.4.0",  # build step 4 — certificate and config collectors
+    version="0.5.0",  # build step 5 — normalizer
     lifespan=lifespan,
 )
 
