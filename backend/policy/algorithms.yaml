@@ -70,6 +70,15 @@ entries:
     verdict: quantum_safe
     source: "NIST IR 8547"
 
+  # The algorithms NIST standardised to replace the vulnerable ones. An imported
+  # CBOM may already list one (demo/README.md §I), and a pack that could not call
+  # its own migration targets safe would leave the readiness percentage with no
+  # numerator.
+  - id: pqc-fips-safe
+    family: [ML-KEM, ML-DSA, SLH-DSA]
+    verdict: quantum_safe
+    source: "NIST FIPS 203, 204 and 205"
+
   - id: aes-ecb
     family: AES
     condition: { mode: ECB }

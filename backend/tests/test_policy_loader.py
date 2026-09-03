@@ -32,7 +32,7 @@ def test_shipped_policy_pack_loads(shipped_policy_dir: Path) -> None:
     # because §6 also requires SHA-256 to resolve to quantum_safe and the pack as
     # printed has no rule that would do it, and DH/DSA, which the pack ruled on
     # in pqc_targets.yaml while having no verdict for them.
-    assert len(pack.algorithms) == 10
+    assert len(pack.algorithms) == 11
     assert len(pack.pqc_targets) == 5
     assert pack.prefer_hybrid is True
     # Both mapping files are populated now — the alias table in step 5, the named

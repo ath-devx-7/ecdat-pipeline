@@ -456,10 +456,37 @@ Expected on import (§7.6):
 
 The `primitive` values use CycloneDX's vocabulary — `pke`, `key-agree`, `kem`,
 `block-cipher` — which is not ECDAT's. Mapping those onto `key_exchange | signature |
-hash | cipher | protocol` is the normalizer's job, and `pke` is the awkward one: RSA
+hash | cipher | protocol` is the importer's job, and `pke` is the awkward one: RSA
 appears under it whether it is being used to encrypt or to sign, and only the
-`cryptoFunctions` list distinguishes them. Getting that wrong sends the finding to the
-wrong wave.
+`cryptoFunctions` list distinguishes them. Sign and verify make it a signature;
+encrypt, decrypt or encapsulation make it key exchange; both, or neither, is
+`unknown`. Getting that wrong sends the finding to the wrong wave.
+
+**Importing it.** A CBOM is added to an existing scan, awaiting approval or finished,
+and the whole analysis re-runs over the combined findings:
+
+```bash
+curl -s -X POST localhost:8000/api/scans/$ID/cbom -H 'content-type: application/json' \
+  -H 'x-filename: sample_cbom.json' --data-binary @demo/sample_cbom.json
+```
+
+Against the shipped pack the ten components become findings for MD5 (two
+occurrences), SHA-1 (two), RSA-1024 as a signature (two, plus the certificate's public
+key), AES-128-ECB, X25519, ML-KEM-768 (`quantum_safe`, the readiness numerator), the
+SHA-1 certificate signature, TLS 1.0 on 8443, and its two cipher suites. The private
+half of the key is not in the document; if it were, its `value` would stay in the
+stored blob and never reach a finding.
+
+**Exporting.** `GET /api/scans/$ID/cbom` builds a CycloneDX 1.6 document from a query
+every time it is asked — one component per asset, one `evidence.occurrences` entry per
+finding, the verdict, wave and recommendation as `ecdat:` properties — and validates
+it against the 1.6 schema before serving it. Refused protocol versions, "undetermined"
+markers and hygiene notes are not assets and are counted on the document's metadata as
+`ecdat:excluded_observations` rather than listed. A private key file is exported as
+`related-crypto-material` with a container name and a size, never the PEM header and
+never bytes. Feeding the export back through the import path preserves every
+algorithm identity, which is the test that makes it a wire format rather than a
+report.
 
 ---
 

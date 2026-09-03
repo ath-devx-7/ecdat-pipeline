@@ -60,9 +60,11 @@ from app.models.scan import Scan
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "Analysis",
     "CollectorRun",
     "FILE_COLLECTORS",
     "RunResult",
+    "analyse",
     "build_context",
     "collectors_for",
     "run_collectors",
@@ -70,8 +72,10 @@ __all__ = [
 ]
 
 #: Collectors that read the approved file tree. Registration order is run order.
-#: Step 12 adds the CBOM importer. The YARA stub (``collectors/binary_yara.py``)
-#: is deliberately not here — see its docstring.
+#: The CBOM importer (``collectors/cbom_import.py``) is not a file collector: a
+#: CBOM arrives by upload (§7.6) and its raw bytes must be stored as provenance,
+#: which needs the session a collector does not have. The YARA stub
+#: (``collectors/binary_yara.py``) is deliberately not here — see its docstring.
 FILE_COLLECTORS: tuple[Collector, ...] = (
     CertificateCollector(),
     ConfigCollector(),
@@ -226,6 +230,44 @@ def run_collectors(ctx: ScanContext, collectors: tuple[Collector, ...]) -> RunRe
     return RunResult(findings=tuple(findings), runs=tuple(runs))
 
 
+@dataclass(frozen=True, slots=True)
+class Analysis:
+    """Everything §4 derives from stored findings — steps 8 to 10 of the lifecycle."""
+
+    alignment: AlignmentResult
+    verdicts: tuple[VerdictRow, ...]
+    risk_scores: tuple[RiskScore, ...]
+    recommendations: tuple[Recommendation, ...]
+
+
+def analyse(session: Session, scan: Scan) -> Analysis:
+    """Run the drift check, the policy engine, the scorer and the advisor over a scan.
+
+    Separate from :func:`run_scan` because findings can arrive by two doors —
+    the collectors, and a CBOM upload (§7.6) — and everything downstream of the
+    ``findings`` table is the same in either case. Each stage replaces its own
+    rows, so re-running over a scan that has gained findings is the normal path,
+    not a special one.
+    """
+    # §9's ordering, and it is load bearing: alignment runs after the store and
+    # before the policy engine, so every stage downstream sees findings that
+    # already carry their drift note.
+    alignment = align(session, scan)
+    verdicts = apply_policy(session, scan.id)
+    # A wave is a function of the verdict, so it cannot be computed before there
+    # is one (§12).
+    scores = score_scan(session, scan)
+    # §4 runs the advisor and the scorer side by side: both read the verdict,
+    # neither reads the other.
+    recommendations = advise_scan(session, scan)
+    return Analysis(
+        alignment=alignment,
+        verdicts=tuple(verdicts),
+        risk_scores=tuple(scores),
+        recommendations=tuple(recommendations),
+    )
+
+
 def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> RunResult:
     """Run every collector this scan's mode calls for, store the result, stamp the scan.
 
@@ -239,24 +281,14 @@ def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> 
 
     result = run_collectors(build_context(session, scan, settings), collectors_for(scan.mode))
     stored = normalize(session, scan.id, result.findings)
-    # §9's ordering, and it is load bearing: alignment runs after the store and
-    # before the policy engine, so every stage downstream sees findings that
-    # already carry their drift note.
-    alignment = align(session, scan)
-    verdicts = apply_policy(session, scan.id)
-    # A wave is a function of the verdict, so it cannot be computed before there
-    # is one (§12).
-    scores = score_scan(session, scan)
-    # §4 runs the advisor and the scorer side by side: both read the verdict,
-    # neither reads the other.
-    recommendations = advise_scan(session, scan)
+    analysis = analyse(session, scan)
     result = dataclass_replace(
         result,
         stored_count=len(stored),
-        verdicts=tuple(verdicts),
-        alignment=alignment,
-        risk_scores=tuple(scores),
-        recommendations=tuple(recommendations),
+        verdicts=analysis.verdicts,
+        alignment=analysis.alignment,
+        risk_scores=analysis.risk_scores,
+        recommendations=analysis.recommendations,
     )
 
     scan.status = result.status
@@ -274,6 +306,6 @@ def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> 
         len(result.verdicts),
         len(result.risk_scores),
         len(result.recommendations),
-        alignment.status,
+        analysis.alignment.status,
     )
     return result

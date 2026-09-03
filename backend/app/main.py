@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ECDAT",
     description=DESCRIPTION,
-    version="0.9.0",  # build step 9 — risk scorer
+    version="0.12.0",  # build step 12 — CBOM import and export
     lifespan=lifespan,
 )
 

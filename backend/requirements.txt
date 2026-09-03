@@ -24,6 +24,11 @@ crossplane>=0.5.8
 semgrep>=1.100
 pyelftools>=0.31
 
+# Step 12 - CBOM import and export. Typed CycloneDX 1.6 model in both
+# directions; the validation extra carries the JSON schema the export is checked
+# against before it is served.
+cyclonedx-python-lib[validation]>=11.0
+
 # Step 7 - network probe. Imported as a library, not shelled out to: SPEC.md 7.5
 # wants typed ServerScanResult objects rather than a JSON round-trip. Pulls in
 # nassl, which pins cryptography below the newest release.

@@ -1,10 +1,12 @@
-"""Scan intake endpoints — SPEC.md §4, steps 1 to 5.
+"""Scan intake endpoints — SPEC.md §4, steps 1 to 5 — and the CBOM boundary (§7.6, §13).
 
-Three endpoints, one lifecycle:
+Five endpoints, one lifecycle:
 
 ``POST /api/scans``                 create, stage, surface-scan  → awaiting_approval
 ``GET  /api/scans/{id}/files``      the tree the user picks from
 ``POST /api/scans/{id}/approve``    the permission gate          → running
+``POST /api/scans/{id}/cbom``       another tool's inventory, in
+``GET  /api/scans/{id}/cbom``       this scan's inventory, out
 
 Scans run synchronously (§2), so both ``POST`` endpoints block: creation through
 staging and enumeration, approval through the collector run. That is a deliberate
@@ -23,21 +25,25 @@ import logging
 from uuid import UUID
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
+from app.collectors.cbom_import import CbomImportError, import_cbom
 from app.config import Settings, get_settings
 from app.core.policy_loader import PolicyPack, get_policy
 from app.db import get_session
 from app.intake.selection import SelectionError, approve_paths
 from app.intake.stage import StagingError, stage_source
 from app.intake.surface import FileCapExceeded, walk_surface
-from app.models.enums import ScanMode, ScanStatus
+from app.models.enums import RecommendationStatus, ScanMode, ScanStatus
 from app.models.scan import Scan, ScanFile
-from app.runner import run_scan
+from app.export.cyclonedx import MEDIA_TYPE, export_cbom
+from app.runner import analyse, run_scan
 from app.schemas.scans import (
     ApproveRequest,
     ApproveResponse,
+    CbomImportResponse,
     CollectorRunSummary,
     FileTreeResponse,
     ScanCreate,
@@ -213,4 +219,89 @@ def approve_scan_files(
         alignment=result.alignment.as_dict() if result.alignment else {},
         wave_counts=result.wave_counts,
         recommendation_counts=result.recommendation_counts,
+    )
+
+
+#: A CBOM can be added to a scan that is waiting for approval or has finished.
+#: Not to one mid-run — two writers on one scan's findings is a race — and not to
+#: one that failed at intake, which has no scope to add findings to.
+_CBOM_IMPORT_STATUSES = frozenset(
+    {ScanStatus.AWAITING_APPROVAL, ScanStatus.COMPLETE, ScanStatus.PARTIAL}
+)
+
+
+@router.post("/{scan_id}/cbom", response_model=CbomImportResponse)
+async def import_scan_cbom(
+    scan_id: UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> CbomImportResponse:
+    """Import another tool's CycloneDX 1.6 CBOM into this scan (§7.6).
+
+    The request body is the document, byte for byte — it is stored exactly as
+    received in ``provenance_blobs`` before anything is read from it. The
+    findings it yields go through the same analysis as the collectors' do.
+    """
+    scan = _load_scan(session, scan_id)
+    if scan.status not in _CBOM_IMPORT_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Scan {scan_id} is '{scan.status.value}'; a CBOM can be added to a scan that "
+            "is awaiting approval, complete or partial.",
+        )
+    raw = await request.body()
+    if not raw.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The request body is empty.")
+    filename = request.headers.get("x-filename")
+
+    def _import():
+        try:
+            result = import_cbom(session, scan, raw, filename=filename)
+        except CbomImportError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        analysis = analyse(session, scan)
+        session.flush()
+        return result, analysis
+
+    result, analysis = await run_in_threadpool(_import)
+    logger.info(
+        "scan %s: CBOM import added %d finding(s) from %d component(s)",
+        scan.id,
+        len(result.findings),
+        result.component_count,
+    )
+    return CbomImportResponse(
+        scan_id=scan.id,
+        status=scan.status,
+        provenance_id=result.blob.id,
+        tool=result.tool,
+        component_count=result.component_count,
+        finding_count=len(result.findings),
+        skipped=list(result.skipped),
+        verdict_counts=_counts(row.verdict.value for row in analysis.verdicts),
+        alignment=analysis.alignment.as_dict(),
+        wave_counts=_counts(row.wave.value for row in analysis.risk_scores),
+        recommendation_counts={
+            **{status_.value: 0 for status_ in RecommendationStatus},
+            **_counts(row.status.value for row in analysis.recommendations),
+        },
+    )
+
+
+def _counts(values) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+@router.get("/{scan_id}/cbom")
+def export_scan_cbom(scan_id: UUID, session: Session = Depends(get_session)) -> Response:
+    """This scan as a CycloneDX 1.6 document, generated on demand from a query (§13)."""
+    scan = _load_scan(session, scan_id)
+    document = export_cbom(session, scan)
+    return Response(
+        content=document,
+        media_type=MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="ecdat-{scan.id}.cdx.json"'},
     )

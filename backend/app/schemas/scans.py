@@ -19,6 +19,7 @@ from app.models.enums import CollectorName, ScanMode, ScanStatus, SourceType
 __all__ = [
     "ApproveRequest",
     "ApproveResponse",
+    "CbomImportResponse",
     "CollectorRunSummary",
     "DirectoryNode",
     "FileNode",
@@ -201,6 +202,27 @@ class ApproveResponse(BaseModel):
     #: Recommendations by status (§11). All four keys are always present:
     #: ``blocked``, ``no_path`` and ``unknown`` are the hard part of a migration,
     #: and a dashboard that shows only ``recommended`` hides it.
+    recommendation_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class CbomImportResponse(BaseModel):
+    """``POST /api/scans/{id}/cbom`` — what the upload became (§7.6)."""
+
+    scan_id: UUID
+    status: ScanStatus
+    #: the ``provenance_blobs`` row holding the upload byte for byte
+    provenance_id: UUID
+    #: the producer named in the document's metadata, if any
+    tool: str | None = None
+    component_count: int = 0
+    #: findings written — one per observed use, so usually more than components
+    finding_count: int = 0
+    #: components that produced no finding, each with the reason — never silent
+    skipped: list[str] = Field(default_factory=list)
+    #: The analysis re-run over the whole scan, imported findings included.
+    verdict_counts: dict[str, int] = Field(default_factory=dict)
+    alignment: dict = Field(default_factory=dict)
+    wave_counts: dict[str, int] = Field(default_factory=dict)
     recommendation_counts: dict[str, int] = Field(default_factory=dict)
 
 

@@ -359,6 +359,8 @@ aliases:
     # which is also what makes `ecc-quantum` fire on the clean host's negotiated
     # group, the finding demo/README.md §B exists to produce.
     names: [X25519, x25519, curve25519, curve25519-sha256, "curve25519-sha256@libssh.org"]
+    # id-X25519, the OID a CBOM or a certificate carries for it (RFC 8410 §3).
+    oids: ["1.3.101.110"]
 
   x448:
     family: ECDH
@@ -454,6 +456,37 @@ aliases:
     oid: "2.16.840.1.101.3.4.1.2"
     source: "RFC 3565 §4.1"
     names: [AES-128-CBC, aes128-cbc, AES128-CBC, "AES/CBC/128"]
+
+  # ECB has its own OIDs in the NIST CSOR, and an imported CBOM identifies the
+  # mode by OID as readily as by name. Resolving them here is what lets
+  # `aes-ecb` in algorithms.yaml fire on a CBOM entry the way it fires on a
+  # `modes.ECB()` call.
+  aes-128-ecb:
+    family: AES
+    primitive: cipher
+    key_size: 128
+    mode: ECB
+    oid: "2.16.840.1.101.3.4.1.1"
+    source: "NIST CSOR, id-aes128-ECB"
+    names: [AES-128-ECB, aes128-ecb, AES128-ECB, "AES/ECB/128"]
+
+  aes-192-ecb:
+    family: AES
+    primitive: cipher
+    key_size: 192
+    mode: ECB
+    oid: "2.16.840.1.101.3.4.1.21"
+    source: "NIST CSOR, id-aes192-ECB"
+    names: [AES-192-ECB, aes192-ecb, AES192-ECB]
+
+  aes-256-ecb:
+    family: AES
+    primitive: cipher
+    key_size: 256
+    mode: ECB
+    oid: "2.16.840.1.101.3.4.1.41"
+    source: "NIST CSOR, id-aes256-ECB"
+    names: [AES-256-ECB, aes256-ecb, AES256-ECB]
 
   aes-192-cbc:
     family: AES
@@ -551,6 +584,64 @@ aliases:
     key_size: 256
     source: "RFC 8439"
     names: [ChaCha20, CHACHA20, chacha20, "chacha20-poly1305@openssh.com", ChaCha20Poly1305]
+
+  # ------------------------------------------------------------------------- #
+  # Post-quantum algorithms — NIST FIPS 203, 204 and 205, OIDs from the CSOR.
+  #
+  # Present so an imported CBOM that already lists a migrated asset resolves to
+  # a family the pack rules on. demo/README.md §I: quantum_safe needs a member
+  # and the readiness percentage needs a numerator. The parameter set is the
+  # name, not a key size, so `key_size` is deliberately absent.
+  # ------------------------------------------------------------------------- #
+
+  ml-kem-512:
+    family: ML-KEM
+    primitive: key_exchange
+    oid: "2.16.840.1.101.3.4.4.1"
+    source: "NIST FIPS 203; NIST CSOR id-alg-ml-kem-512"
+    names: [ML-KEM-512, MLKEM512, mlkem512, Kyber512]
+
+  ml-kem-768:
+    family: ML-KEM
+    primitive: key_exchange
+    oid: "2.16.840.1.101.3.4.4.2"
+    source: "NIST FIPS 203; NIST CSOR id-alg-ml-kem-768"
+    names: [ML-KEM-768, MLKEM768, mlkem768, Kyber768]
+
+  ml-kem-1024:
+    family: ML-KEM
+    primitive: key_exchange
+    oid: "2.16.840.1.101.3.4.4.3"
+    source: "NIST FIPS 203; NIST CSOR id-alg-ml-kem-1024"
+    names: [ML-KEM-1024, MLKEM1024, mlkem1024, Kyber1024]
+
+  ml-dsa-44:
+    family: ML-DSA
+    primitive: signature
+    oid: "2.16.840.1.101.3.4.3.17"
+    source: "NIST FIPS 204; NIST CSOR id-ml-dsa-44"
+    names: [ML-DSA-44, MLDSA44, Dilithium2]
+
+  ml-dsa-65:
+    family: ML-DSA
+    primitive: signature
+    oid: "2.16.840.1.101.3.4.3.18"
+    source: "NIST FIPS 204; NIST CSOR id-ml-dsa-65"
+    names: [ML-DSA-65, MLDSA65, Dilithium3]
+
+  ml-dsa-87:
+    family: ML-DSA
+    primitive: signature
+    oid: "2.16.840.1.101.3.4.3.19"
+    source: "NIST FIPS 204; NIST CSOR id-ml-dsa-87"
+    names: [ML-DSA-87, MLDSA87, Dilithium5]
+
+  slh-dsa-sha2-128s:
+    family: SLH-DSA
+    primitive: signature
+    oid: "2.16.840.1.101.3.4.3.20"
+    source: "NIST FIPS 205; NIST CSOR id-slh-dsa-sha2-128s"
+    names: [SLH-DSA-SHA2-128s, SLH-DSA-SHA2-128S, "SPHINCS+-SHA2-128s"]
 
   # ------------------------------------------------------------------------- #
   # Protocol versions
