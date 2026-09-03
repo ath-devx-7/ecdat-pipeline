@@ -48,6 +48,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -60,10 +61,11 @@ from app.core.policy_loader import (
     AlgorithmRule,
     PolicyPack,
     PolicyValidationError,
+    PqcTarget,
     get_policy,
 )
 from app.models.analysis import VerdictRow
-from app.models.enums import Primitive, Verdict
+from app.models.enums import ActionClass, Primitive, Verdict
 from app.models.finding import Finding
 
 logger = logging.getLogger(__name__)
@@ -73,8 +75,11 @@ __all__ = [
     "NO_RULE_CITATION",
     "PolicyDecision",
     "VERDICT_PRECEDENCE",
+    "ACTION_CLASS_ORDER",
     "apply_policy",
     "classify",
+    "cheapest_action_class",
+    "pqc_targets_for",
     "validate_rules",
 ]
 
@@ -423,3 +428,97 @@ def apply_policy(
             ", ".join(f"{family} x{count}" for family, count in gaps.most_common()),
         )
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# PQC target matching — §11's first step, needed here by §12's wave table
+# --------------------------------------------------------------------------- #
+
+#: Cheapest first. §11's third tie-break ("lower action class wins") and §12's
+#: split between wave_1 and wave_2 both read this order, so it is written once.
+ACTION_CLASS_ORDER: tuple[ActionClass, ...] = (
+    ActionClass.CONFIG,
+    ActionClass.LIBRARY_UPGRADE,
+    ActionClass.CODE_CHANGE,
+    ActionClass.HARDWARE,
+)
+
+
+def _match_values(match: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    """``family: AES`` and ``family: [RSA, ECDH]`` are both valid YAML (§6)."""
+    value = match.get(key)
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(item) for item in value)
+
+
+def pqc_targets_for(
+    finding: Finding, policy: PolicyPack, data_lifetime_years: int | None = None
+) -> tuple[PqcTarget, ...]:
+    """Every ``pqc_targets.yaml`` entry whose ``match`` block covers this finding.
+
+    §11's first step, and a pure lookup like everything else in this module.
+    Matching is on **primitive plus family**, never on algorithm name alone: RSA
+    maps to ML-KEM for key exchange and ML-DSA for signatures, and only the
+    primitive tells them apart. Getting that wrong makes the advisor wrong about
+    half the time.
+
+    It lives here rather than in the advisor because §12's wave table needs an
+    action class two steps before the advisor exists — ``wave_1`` and ``wave_2``
+    are the same finding at different migration costs. Step 10 builds parameter
+    selection, feasibility and hybrid policy on top of this; none of that belongs
+    in a lookup.
+    """
+    matched: list[PqcTarget] = []
+    for target in policy.pqc_targets:
+        primitives = _match_values(target.match, "primitive")
+        if primitives and finding.primitive.value not in primitives:
+            continue
+
+        families = _match_values(target.match, "family")
+        if families:
+            observed = identity_key(finding.algorithm_family or "")
+            if not observed or observed not in {identity_key(f) for f in families}:
+                continue
+
+        lifetime_gt = target.match.get("asset_lifetime_gt")
+        if lifetime_gt is not None:
+            # An unstated lifetime does not clear a threshold. The same rule the
+            # verdict conditions follow: absent evidence satisfies nothing.
+            if data_lifetime_years is None or data_lifetime_years <= int(lifetime_gt):
+                continue
+
+        matched.append(target)
+    return tuple(matched)
+
+
+def cheapest_action_class(
+    targets: Sequence[PqcTarget],
+) -> tuple[ActionClass | None, str | None]:
+    """The lowest action class among matching targets, and which rule carried it.
+
+    §11's tie-break says the lower action class wins, and the same choice is the
+    right one for planning: the wave should reflect the cheapest route that
+    exists, not the most expensive one that also matches.
+    """
+    best: ActionClass | None = None
+    best_id: str | None = None
+    for target in targets:
+        if target.action_class is None:
+            continue
+        try:
+            action = ActionClass(str(target.action_class))
+        except ValueError:
+            logger.warning(
+                "pqc_targets.yaml: entry '%s' names action_class %r, which is not one "
+                "of %s; ignored for planning",
+                target.id,
+                target.action_class,
+                ", ".join(a.value for a in ActionClass),
+            )
+            continue
+        if best is None or ACTION_CLASS_ORDER.index(action) < ACTION_CLASS_ORDER.index(best):
+            best, best_id = action, target.id
+    return best, best_id

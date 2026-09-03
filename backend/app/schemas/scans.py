@@ -194,6 +194,10 @@ class ApproveResponse(BaseModel):
     #: than an empty panel, because "no drift" and "not checked" are different
     #: statements about a host.
     alignment: dict = Field(default_factory=dict)
+    #: Findings per migration wave (§12). Absent from this map are the findings
+    #: that need no migration at all — a quantum_safe or hygiene verdict gets no
+    #: wave rather than a reassuring one.
+    wave_counts: dict[str, int] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #

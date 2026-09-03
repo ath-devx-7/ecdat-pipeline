@@ -21,9 +21,10 @@ swapping this loop for a queue must not require touching a single collector.
 returns; :func:`run_scan` hands what it observed to the normalizer (§8), which is
 the only thing in the system that writes ``findings`` rows. The split is why a
 collector can be tested without a database and why the store has exactly one
-door. The later stages hang off ``run_scan`` in §4's order: the policy engine
-(§10) classifies what the normalizer stored, and steps 8 to 10 slot the alignment
-check in front of it and the advisor and risk scorer behind it.
+door. The later stages hang off ``run_scan`` in §4's order: the drift check (§9)
+compares what the normalizer stored, the policy engine (§10) classifies it, and
+the risk scorer (§12) places what needs migrating into waves. Step 10 adds the
+advisor at the end of that line.
 """
 
 from __future__ import annotations
@@ -43,9 +44,10 @@ from app.config import Settings, get_settings
 from app.core.alignment import AlignmentResult, align
 from app.core.normalizer import normalize
 from app.core.policy import apply_policy
+from app.core.risk import score_scan, wave_counts
 from app.intake.selection import approved_paths
 from app.intake.stage import work_dir_for
-from app.models.analysis import VerdictRow
+from app.models.analysis import RiskScore, VerdictRow
 from app.models.enums import CollectorName, ScanMode, ScanStatus
 from app.models.scan import Scan
 
@@ -97,6 +99,14 @@ class RunResult:
     verdicts: tuple[VerdictRow, ...] = ()
     #: What the drift check did (§9) — including, explicitly, doing nothing.
     alignment: AlignmentResult | None = None
+    #: ``risk_scores`` rows (§12). Fewer than there are findings: a verdict that
+    #: needs no migration gets no wave rather than a reassuring one.
+    risk_scores: tuple[RiskScore, ...] = ()
+
+    @property
+    def wave_counts(self) -> dict[str, int]:
+        """Findings per migration wave. Never collapsed into a single score."""
+        return wave_counts(self.risk_scores)
 
     @property
     def verdict_counts(self) -> dict[str, int]:
@@ -204,11 +214,15 @@ def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> 
     # already carry their drift note.
     alignment = align(session, scan)
     verdicts = apply_policy(session, scan.id)
+    # A wave is a function of the verdict, so it cannot be computed before there
+    # is one (§12).
+    scores = score_scan(session, scan)
     result = dataclass_replace(
         result,
         stored_count=len(stored),
         verdicts=tuple(verdicts),
         alignment=alignment,
+        risk_scores=tuple(scores),
     )
 
     scan.status = result.status
@@ -217,13 +231,14 @@ def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> 
 
     logger.info(
         "scan %s finished %s: %d raw finding(s) from %d collector(s), %d stored, "
-        "%d verdict(s), alignment %s",
+        "%d verdict(s), %d risk score(s), alignment %s",
         scan.id,
         scan.status.value,
         len(result.findings),
         len(result.runs),
         result.stored_count,
         len(result.verdicts),
+        len(result.risk_scores),
         alignment.status,
     )
     return result

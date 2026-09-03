@@ -122,8 +122,20 @@ curl -X POST localhost:8000/api/scans/$ID/approve -H 'content-type: application/
 **Use `data_lifetime_years: 20`.** With the shipped policy pack (Z=12, Y=1) the Mosca
 inequality is `X + 1 - 12 > 0`, so anything under X=12 is not overdue and every
 quantum-vulnerable finding lands in `wave_3`. At X=20 the urgency is +9 years and
-`wave_1` and `wave_2` populate. Re-running at X=1 and watching findings move to
-`wave_3` is the clearest demonstration of why the scorer is not just a severity sort.
+`wave_1` populates. Re-running at X=1 and watching those same findings move to
+`wave_3` is the clearest demonstration of why the scorer is not just a severity sort:
+nothing about the algorithms changed, only how long their traffic has to stay secret.
+
+**`wave_2` is empty against this pack, and that is the pack's doing rather than a
+bug.** `wave_2` holds quantum-vulnerable *confidentiality* findings whose migration
+is a code change or a hardware swap. Every quantum-vulnerable key exchange in the
+demo — RSA, ECDH, finite-field DH — matches `kex-to-mlkem`, whose `action_class` is
+`config`, so they all land in `wave_1`. Populating `wave_2` needs a
+`pqc_targets.yaml` entry mapping a harvestable primitive to `code_change` or
+`hardware`; the existing `cipher-upgrade` rule would do it, but DES, 3DES and RC4
+have no `algorithms.yaml` verdict, so they resolve to `unknown` and go to `verify`
+instead. Closing that gap is one cited entry, exactly like the others listed at the
+end of this file.
 
 ---
 

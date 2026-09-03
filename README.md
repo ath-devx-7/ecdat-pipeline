@@ -32,7 +32,8 @@ Built one step at a time per `BUILD_PLAN.md`.
 | 6 | Policy engine — a cited verdict per finding | done |
 | 7 | Network probe — live TLS observation | done |
 | 8 | Alignment check — config against handshake | done |
-| 9–14 | risk scorer, advisor, remaining collectors, UI, reports | not started |
+| 9 | Risk scorer — Mosca's inequality, in waves | done |
+| 10–14 | advisor, remaining collectors, UI, reports | not started |
 
 ## Demo environment
 
@@ -168,7 +169,21 @@ headline finding. When there is nothing to compare, the result is an explicit
 different statements about a host.
 
 The policy engine (§10) then gives every finding a verdict traceable to a published
-standard. It is a pure lookup against `algorithms.yaml`, and `broken_now` and
+standard.
+
+Finally the **risk scorer** (§12) turns verdicts into a plan. It applies Mosca's
+inequality — `(X + Y) − Z`, where X is how long the data must stay secret — but only
+to confidentiality primitives, because harvest-now-decrypt-later needs something to
+harvest. A signature is not harvestable: forging one in 2035 does not retroactively
+forge a 2026 transaction, so X is irrelevant, `urgency_years` is null and it goes to
+`wave_3`. Skipping that gate ranks a certificate's signing key as urgently as the key
+exchange protecting the traffic, which would reorder an entire migration budget.
+
+The output is waves rather than a sorted list, because a ranked list that puts a
+three-year rewrite at position one is operationally useless. All three Mosca inputs
+are stored on every row alongside a `rationale` object naming every factor, so any
+wave can be reconstructed by an auditor. A verdict that needs no migration —
+`quantum_safe`, `hygiene` — gets no wave at all rather than a reassuring one. It is a pure lookup against `algorithms.yaml`, and `broken_now` and
 `quantum_vulnerable` are independent classifications rather than two points on one scale —
 RSA-4096 is quantum-vulnerable and perfectly secure today. Anything with no matching entry
 is `unknown`, and the row still says *why* no standard is cited.
