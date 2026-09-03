@@ -71,6 +71,16 @@ python -m venv .venv
 Point the backend at a database and create the schema. Postgres is the supported store for
 real scans; SQLite is enough to try the tool on one machine.
 
+For Postgres, create the role and database once (you will be asked for the `postgres`
+superuser password; the role name and password below are the defaults in the URL and can be
+anything as long as the URL matches):
+
+```bash
+psql -U postgres -h localhost -c "CREATE ROLE ecdat WITH LOGIN PASSWORD 'ecdat';"
+psql -U postgres -h localhost -c "CREATE DATABASE ecdat OWNER ecdat;"
+# Windows, if psql is not on PATH:  & "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -h localhost -c "..."
+```
+
 ```bash
 cd backend
 export ECDAT_DATABASE_URL="postgresql+psycopg://ecdat:ecdat@localhost:5432/ecdat"   # bash
