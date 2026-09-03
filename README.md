@@ -73,12 +73,19 @@ real scans; SQLite is enough to try the tool on one machine.
 
 ```bash
 cd backend
-export ECDAT_DATABASE_URL="postgresql+psycopg://ecdat:ecdat@localhost:5432/ecdat"
+export ECDAT_DATABASE_URL="postgresql+psycopg://ecdat:ecdat@localhost:5432/ecdat"   # bash
 # or, for a local trial:  export ECDAT_DATABASE_URL="sqlite+pysqlite:///ecdat.sqlite"
 alembic upgrade head
 ```
 
-Settings can also live in `backend/.env` (ignored by git), one `ECDAT_...=value` per line.
+```powershell
+cd backend
+$env:ECDAT_DATABASE_URL = "postgresql+psycopg://ecdat:ecdat@localhost:5432/ecdat"   # PowerShell
+alembic upgrade head
+```
+
+Either form lasts for that terminal session. Settings can also live in `backend/.env`
+(ignored by git), one `ECDAT_...=value` per line, which the backend reads on every start.
 
 Start the API:
 
