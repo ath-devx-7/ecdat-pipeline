@@ -33,7 +33,11 @@ Built one step at a time per `BUILD_PLAN.md`.
 | 7 | Network probe — live TLS observation | done |
 | 8 | Alignment check — config against handshake | done |
 | 9 | Risk scorer — Mosca's inequality, in waves | done |
-| 10–14 | advisor, remaining collectors, UI, reports | not started |
+| 10 | Advisor — targets, parameter sets, blocker chains | done |
+| 11 | Code and binary collectors — Semgrep, pyelftools | done |
+| 12 | CBOM import and CycloneDX 1.6 export | done |
+| 13 | React dashboard — six screens | done |
+| 14 | PDF report | not started |
 
 ## Demo environment
 
@@ -94,6 +98,22 @@ curl localhost:8000/api/scans/$ID/files
 curl -X POST localhost:8000/api/scans/$ID/approve -H 'content-type: application/json'   -d '{"paths":["etc/nginx/nginx.conf","app/crypto.py"]}'
 ```
 
+### Results endpoints
+
+Everything the dashboard shows is a query over the analysis tables, computed on request.
+
+| Endpoint | Does |
+|---|---|
+| `GET /api/policy` | The loaded pack's version, publish date, staleness, and the Mosca defaults the Z slider starts from. |
+| `GET /api/scans` | Recent scans, newest first. |
+| `GET /api/scans/{id}/overview` | Readiness with its denominator and the unassessed count beside it, verdict and wave counts, all four recommendation statuses, the drift status, the policy stamp. |
+| `GET /api/scans/{id}/findings` | Filterable by `verdict`, `wave`, `collector`, `confidence`, `source_layer` (OR within a field, AND across), plus `q`. Each row carries its verdict with citation, its wave with the Mosca inputs and rationale, its recommendations, and the raw evidence. |
+| `GET /api/scans/{id}/alignment` | The drift notes, each with the declaring config finding and the observed live finding side by side — or `skipped` with the reason. Never an empty list without one. |
+| `GET /api/scans/{id}/roadmap` | Findings grouped by wave with target, prerequisites and action class. |
+| `POST /api/scans/{id}/rescore` | `{"z_years": N}` — re-scores the scan against a different quantum-computer arrival assumption. The Z slider. |
+| `POST /api/scans/{id}/cbom` | Imports another tool's CycloneDX 1.6 CBOM, stored byte for byte as provenance. |
+| `GET /api/scans/{id}/cbom` | This scan as a CycloneDX 1.6 document, validated before it is served. |
+
 The surface scan records path and size only — no file is opened until its path has been
 approved. `folder` sources are read where they live; `github` and `docker_image` sources
 are staged under `ECDAT_WORK_ROOT/{scan_id}`, image layers merged in manifest order with
@@ -101,16 +121,40 @@ whiteouts skipped. `.git` is pruned from the walk (`ECDAT_SURFACE_EXCLUDE_DIRS`)
 objects are not deployed artefacts and would consume the file cap before a single source
 file reached the approval screen.
 
+## Dashboard — local setup
+
+`frontend/` is React + Vite + Tailwind with Recharts, built with Node 20+.
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173, proxying /api to the backend on :8000
+npm test           # vitest — the file-selection logic
+npm run build      # tsc + vite build into frontend/dist
+```
+
+Six screens (`SPEC.md` §13): new scan, file selection, overview, findings, drift and
+roadmap. Three rules from the spec are visible on them rather than buried: the readiness
+percentage states its denominator and shows the unassessed count beside it; the
+recommendation tiles are always four, `no_path` and `unknown` included, because reporting
+only `recommended` hides the hard part; and the drift screen shows *why* it has nothing to
+show when a scan could not be compared, instead of an empty panel. Z — years until a
+cryptographically relevant quantum computer — is a slider on both the new-scan and the
+overview screens, defaulting to the policy pack's value, and moving it re-scores the scan.
+
 ## Collectors
 
-Six in the finished system (`SPEC.md` §7); three built so far. The two file collectors
-read only what approval put in scope; the prober reaches only hosts the scan declared.
+All six of `SPEC.md` §7. The file collectors read only what approval put in scope; the
+prober reaches only hosts the scan declared; the importer reads only what was uploaded.
 
 | Collector | Reads | `source_layer` |
 |---|---|---|
 | `certs` | `.pem .crt .cer .der` by extension, plus any file containing a `BEGIN CERTIFICATE` block | `artifact` |
 | `config` | `openssl.cnf`, `nginx.conf`, `sshd_config`, `java.security`, matched by name anywhere in the tree | `config` |
+| `code` | Source files, through Semgrep with the local rule file `backend/semgrep_rules/crypto.yaml` — no registry, no metrics | `source` |
+| `binary` | ELF files: `DT_NEEDED`, `.dynsym` and `.rodata` via pyelftools; nothing is executed | `artifact` |
 | `network` | The `{host, port}` pairs in `scan.probe_targets`, and nothing else | `live` |
+| `cbom_import` | An uploaded CycloneDX 1.6 document, kept byte for byte in `provenance_blobs` | `source` |
 
 Three properties are worth stating because they are enforced in one place rather than
 trusted to each collector:

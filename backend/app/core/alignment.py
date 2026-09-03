@@ -82,6 +82,7 @@ __all__ = [
     "UNCLASSIFIED_SUFFIX",
     "ServiceScope",
     "align",
+    "describe_alignment",
 ]
 
 STATUS_COMPARED = "compared"
@@ -539,6 +540,53 @@ def align(session: Session, scan: Scan) -> AlignmentResult:
         notes=tuple(notes),
         compared_services=compared,
         scope_skipped=tuple(scope_skipped),
+    )
+
+
+def describe_alignment(session: Session, scan: Scan) -> AlignmentResult:
+    """What :func:`align` decided, re-read without re-deciding it.
+
+    The dashboard (§13 screen 5) needs the ``skipped`` state and its reason as
+    much as it needs the notes, and neither is stored — only the notes are. So
+    the skip logic is re-evaluated over the stored findings, which is
+    deterministic, and the notes are read back rather than regenerated. This
+    function writes nothing: a GET must not rewrite the drift table.
+    """
+    findings = list(
+        session.scalars(
+            sa.select(Finding).where(Finding.scan_id == scan.id).order_by(Finding.id)
+        )
+    )
+    live = [f for f in findings if f.source_layer is SourceLayer.LIVE]
+    config = [f for f in findings if f.source_layer is SourceLayer.CONFIG]
+
+    skipped = _nothing_to_compare(scan, live, config)
+    if skipped is not None:
+        return AlignmentResult(status=STATUS_SKIPPED, reason=skipped)
+    services = _observed_services(live)
+    if not services:
+        return AlignmentResult(
+            status=STATUS_SKIPPED,
+            reason="the probe produced no protocol observations to compare",
+        )
+
+    notes = tuple(
+        session.scalars(
+            sa.select(AlignmentNote)
+            .where(AlignmentNote.scan_id == scan.id)
+            .order_by(AlignmentNote.asset_key, AlignmentNote.id)
+        )
+    )
+    scope_skipped = tuple(
+        f"{declaration.site} ({declaration.scope.describe()})"
+        for declaration in _declarations(config)
+        if not declaration.scope.comparable
+    )
+    return AlignmentResult(
+        status=STATUS_COMPARED,
+        notes=notes,
+        compared_services=tuple(str(service) for service in services),
+        scope_skipped=scope_skipped,
     )
 
 

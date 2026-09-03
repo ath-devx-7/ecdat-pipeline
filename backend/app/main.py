@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import scans
+from app.api import findings, scans
 from app.startup import initialise
 
 logger = logging.getLogger(__name__)
@@ -35,11 +35,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ECDAT",
     description=DESCRIPTION,
-    version="0.12.0",  # build step 12 — CBOM import and export
+    version="0.13.0",  # build step 13 — dashboard
     lifespan=lifespan,
 )
 
 app.include_router(scans.router)
+app.include_router(findings.router)
 
 
 @app.get("/api/health", tags=["meta"])
