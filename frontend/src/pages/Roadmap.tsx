@@ -69,8 +69,8 @@ export default function Roadmap() {
             <p className="text-sm text-slate-500">Empty.</p>
           ) : (
             <ul className="divide-y divide-slate-100">
-              {data.waves[wave].map((item) => (
-                <Item key={item.finding.id} item={item} scanId={scanId} />
+              {groupItems(data.waves[wave]).map((group) => (
+                <Item key={group.item.finding.id} group={group} scanId={scanId} />
               ))}
             </ul>
           )}
@@ -121,7 +121,48 @@ function Blockers({ chains }: { chains: BlockedChain[] }) {
   );
 }
 
-function Item({ item, scanId }: { item: RoadmapItem; scanId: string }) {
+// One `AES.new(...)` call is not an asset; a file's use of AES is. A library
+// that calls it 62 times in one module has one thing to change there, and 62
+// identical rows bury every row that is not identical. The grouping is a
+// presentation choice only — /roadmap still returns every finding, the findings
+// table still lists them, and the count on each row says how many there were.
+type ItemGroup = { item: RoadmapItem; occurrences: number; lines: string[] };
+
+function groupItems(items: RoadmapItem[]): ItemGroup[] {
+  const groups = new Map<string, ItemGroup>();
+  for (const item of items) {
+    const location = item.finding.evidence_location ?? "";
+    const cut = location.lastIndexOf(":");
+    const file = cut > 0 ? location.slice(0, cut) : location;
+    const line = cut > 0 ? location.slice(cut + 1) : "";
+    // Anything that would read differently keeps its own row.
+    const key = [
+      describeAlgorithm(item.finding),
+      item.finding.algorithm_name,
+      item.finding.primitive,
+      item.finding.source_layer,
+      file,
+      item.verdict ?? "",
+      item.urgency_years ?? "",
+      item.recommendations.map((r) => `${r.status}:${r.target ?? ""}`).join("|"),
+    ].join("\u0000");
+
+    const existing = groups.get(key);
+    if (existing) {
+      existing.occurrences += 1;
+      if (line) existing.lines.push(line);
+    } else {
+      groups.set(key, { item, occurrences: 1, lines: line ? [line] : [] });
+    }
+  }
+  return [...groups.values()];
+}
+
+function Item({ group, scanId }: { group: ItemGroup; scanId: string }) {
+  const { item, occurrences, lines } = group;
+  const location = item.finding.evidence_location ?? "";
+  const cut = location.lastIndexOf(":");
+  const file = cut > 0 ? location.slice(0, cut) : location;
   return (
     <li className="grid gap-2 py-2 text-sm md:grid-cols-3">
       <div>
@@ -129,7 +170,15 @@ function Item({ item, scanId }: { item: RoadmapItem; scanId: string }) {
           {describeAlgorithm(item.finding)}{" "}
           <span className="text-xs font-normal text-slate-500">{titleCase(item.finding.primitive)}</span>
         </div>
-        <div className="font-mono text-xs text-slate-600">{item.finding.evidence_location}</div>
+        <div className="font-mono text-xs text-slate-600">
+          {occurrences > 1 ? file : item.finding.evidence_location}
+        </div>
+        {occurrences > 1 && (
+          <div className="text-xs text-slate-500">
+            <strong>{occurrences} uses</strong> · lines {lines.slice(0, 6).join(", ")}
+            {lines.length > 6 && ` and ${lines.length - 6} more`}
+          </div>
+        )}
         <div className="mt-1 text-xs">
           {item.verdict && <span className={`badge mr-1 ${VERDICT_BADGE[item.verdict]}`}>{VERDICT_LABEL[item.verdict]}</span>}
           {item.urgency_years !== null ? (
@@ -168,7 +217,7 @@ function Item({ item, scanId }: { item: RoadmapItem; scanId: string }) {
             <div className="text-slate-500">{rec.source_citation}</div>
           </div>
         ))}
-        <Link to={`/scans/${scanId}/findings?q=${encodeURIComponent(item.finding.evidence_location ?? "")}`} className="text-xs underline">
+        <Link to={`/scans/${scanId}/findings?q=${encodeURIComponent(occurrences > 1 ? file : item.finding.evidence_location ?? "")}`} className="text-xs underline">
           open in findings
         </Link>
       </div>

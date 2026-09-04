@@ -954,6 +954,71 @@ def test_the_openssl_c_api_records_key_exchange_curves_and_tls_knobs(tls_api_fin
 # --------------------------------------------------------------------------- #
 
 
+def test_every_spelling_a_rule_declares_resolves_to_a_family() -> None:
+    """The guard against moving findings from absent to unknown (§8).
+
+    Read off the rule file rather than off a fixture. The fixture version of this
+    test passed while ``ecdat.python.pycryptodome-cipher`` was emitting
+    ``Crypto.Cipher.ChaCha20_Poly1305``, ``Crypto.Cipher.Salsa20`` and four more
+    invented families on a real repository, because the fixture only exercised
+    the three modules it happened to import. A rule that declares what it can
+    produce can be checked against the alias table exhaustively, and that is the
+    only version of this check worth having.
+    """
+    from app.core.normalizer import get_alias_index, identity_key
+    from app.core.policy_loader import get_policy
+
+    aliases = get_alias_index(get_policy())
+    document = yaml.safe_load(get_settings().semgrep_rules_path.read_text(encoding="utf-8"))
+
+    unresolved: dict[str, list[str]] = {}
+    declared = 0
+    for rule in document["rules"]:
+        meta = (rule.get("metadata") or {}).get("ecdat") or {}
+        allowed = meta.get("algorithm_in")
+        if not allowed:
+            continue
+        prefix = meta.get("algorithm_prefix", "")
+        declared += 1
+        missing = [
+            f"{prefix}{name}"
+            for name in allowed
+            if identity_key(f"{prefix}{name}") not in aliases.by_name
+        ]
+        if missing:
+            unresolved[rule["id"]] = missing
+
+    assert declared, "no rule declares algorithm_in; this test would pass vacuously"
+    assert unresolved == {}
+
+
+def test_a_capture_outside_a_rules_declared_spellings_is_dropped(scan_context) -> None:
+    """An aliased import binds the local name, and the message carries that name.
+
+    ``from Crypto.Cipher import PKCS1_v1_5 as PKCS`` makes Semgrep interpolate
+    ``PKCS`` into the message even though the metavariable matched the real module
+    — so a metavariable-regex does not bound what reaches the collector. The
+    finding is dropped rather than recorded as ``Crypto.Cipher.PKCS``, which
+    would resolve to nothing and be counted as its own family.
+    """
+    ctx = scan_context(
+        {
+            "aliased.py": (
+                "from Crypto.Cipher import PKCS1_v1_5 as PKCS\n"
+                "from Crypto.Cipher import AES\n"
+                "\n"
+                "def run(key):\n"
+                "    return PKCS.new(key), AES.new(key, AES.MODE_GCM)\n"
+            )
+        }
+    )
+
+    findings = CodeCollector().collect(ctx)
+
+    assert [f.algorithm_name for f in findings] == ["Crypto.Cipher.AES"]
+    assert not [f for f in findings if "PKCS" in f.algorithm_name]
+
+
 def test_every_spelling_the_new_rules_produce_resolves_to_a_family(
     go_findings, js_findings, python_asymmetric_findings, tls_api_findings
 ) -> None:
@@ -984,3 +1049,37 @@ def test_every_spelling_the_new_rules_produce_resolves_to_a_family(
     )
 
     assert unresolved == []
+
+
+def test_a_partial_parse_reason_is_a_sentence_not_a_json_dump(scan_context) -> None:
+    """The reason reaches a banner and a PDF, so it has to be readable.
+
+    Semgrep reports `type` as a plain string for most errors but as
+    ``["PartialParsing", [ ...every offending range... ]]`` for a parse failure.
+    Stringifying that put a screenful of JSON where the dashboard shows one line.
+    """
+    ctx = scan_context({"a.py": "x = 1\n"})
+    document = {
+        "version": "test",
+        "results": [],
+        "errors": [
+            {
+                "type": [
+                    "PartialParsing",
+                    [{"path": "src/ARC4.c", "start": {"line": 38, "col": 12}}],
+                ],
+                "message": "Syntax error at line src/ARC4.c:38:\nlong detail follows",
+                "path": "src/ARC4.c",
+            }
+        ],
+    }
+
+    with pytest.raises(CollectorPartial) as raised:
+        CodeCollector(fake_runner(document)).collect(ctx)
+
+    reason = str(raised.value)
+    assert reason.startswith("semgrep reported PartialParsing at src/ARC4.c")
+    assert "Syntax error at line src/ARC4.c:38:" in reason
+    # The offending-range list is what made this unreadable.
+    assert "'start'" not in reason and "col" not in reason
+    assert len(reason) < 200

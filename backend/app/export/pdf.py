@@ -107,6 +107,56 @@ def _describe(finding) -> str:
     return " ".join(parts)
 
 
+def _group_key(row: dict[str, Any]) -> tuple:
+    """What makes two rows the same line of work rather than two.
+
+    One `AES.new(...)` call is not an asset; the file's use of AES is. A library
+    that calls it 62 times in one test module has one thing to migrate there, and
+    a report that prints 62 identical rows buries the other 61 findings that are
+    not identical. The key deliberately keeps the *file* — two files using the
+    same algorithm are two places to change — and the verdict, the wave and the
+    recommended target, so nothing that reads differently is ever merged.
+    """
+    finding = row["finding"]
+    location = finding.evidence_location or ""
+    file_part = location.rsplit(":", 1)[0] if ":" in location else location
+    return (
+        row["label"],
+        finding.algorithm_name,
+        finding.primitive.value,
+        finding.collector.value,
+        finding.source_layer.value,
+        file_part,
+        row["verdict"].verdict.value if row["verdict"] else None,
+        row["score"].urgency_years if row["score"] else None,
+        tuple(sorted((rec.status.value, rec.target or "") for rec in row["recommendations"])),
+    )
+
+
+def _grouped(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse identical rows, keeping the count and where they were.
+
+    Nothing is dropped from the store, the findings API or the CBOM — this is a
+    presentation decision about one table. `occurrences` and `lines` carry what
+    the collapse removed, so a reader can still get to every call site.
+    """
+    grouped: dict[tuple, dict[str, Any]] = {}
+    for row in items:
+        key = _group_key(row)
+        existing = grouped.get(key)
+        location = row["finding"].evidence_location or ""
+        line = location.rsplit(":", 1)[-1] if ":" in location else ""
+        if existing is None:
+            grouped[key] = {**row, "occurrences": 1, "lines": [line] if line else []}
+        else:
+            existing["occurrences"] += 1
+            if line:
+                existing["lines"].append(line)
+    for row in grouped.values():
+        row["lines"] = sorted(row["lines"], key=lambda value: (len(value), value))
+    return list(grouped.values())
+
+
 def report_context(session: Session, scan: Scan, policy: PolicyPack | None = None) -> dict[str, Any]:
     """Everything the template renders, from the same queries the dashboard uses."""
     pack = policy or get_policy()
@@ -137,13 +187,14 @@ def report_context(session: Session, scan: Scan, policy: PolicyPack | None = Non
     for row in rows:
         if row["score"] is not None:
             waves[row["score"].wave.value].append(row)
-    for items in waves.values():
+    for wave_key, items in waves.items():
         items.sort(
             key=lambda row: (
                 -(row["score"].urgency_years if row["score"].urgency_years is not None else -10**6),
                 row["finding"].evidence_location or "",
             )
         )
+        waves[wave_key] = _grouped(items)
 
     blocked = [
         {"row": row, "recommendation": rec}
@@ -180,7 +231,12 @@ def report_context(session: Session, scan: Scan, policy: PolicyPack | None = Non
     for verdict in loaded.verdicts.values():
         if verdict.verdict.value in verdict_counts:
             verdict_counts[verdict.verdict.value] += 1
-    wave_counts = {wave: len(items) for wave, items in waves.items()}
+    # Grouped rows, but per-finding counts: the headline number has to be the
+    # number of findings, or the report disagrees with the dashboard and the
+    # store about how much there is.
+    wave_counts = {
+        wave: sum(row["occurrences"] for row in items) for wave, items in waves.items()
+    }
     status_counts = {s.value: 0 for s in RecommendationStatus}
     for recs in loaded.recommendations.values():
         for rec in recs:
@@ -198,6 +254,19 @@ def report_context(session: Session, scan: Scan, policy: PolicyPack | None = Non
         "wave_counts": wave_counts,
         "wave_titles": WAVE_TITLES,
         "wave_explanations": WAVE_EXPLANATIONS,
+        # The stored diagnostics (§2), so the report names which collector
+        # degraded and which extensions nothing ruled on rather than saying only
+        # that something did. Empty for a scan that predates the field.
+        "degraded": [
+            run
+            for run in ((scan.diagnostics or {}).get("collectors") or [])
+            if run.get("ran") and run.get("reason")
+        ],
+        "unruled": [
+            row
+            for row in ((scan.diagnostics or {}).get("extensions") or [])
+            if row.get("code_scanned") and not row.get("ruled") and row.get("approved_files")
+        ],
         "waves": waves,
         "unscored": sum(1 for row in rows if row["score"] is None),
         "status_counts": status_counts,

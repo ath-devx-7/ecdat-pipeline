@@ -244,7 +244,7 @@ aliases:
     family: RSA
     oid: "1.2.840.113549.1.1.1"
     source: "RFC 3279 §2.3.1"
-    names: [RSA, rsaEncryption, RSAPublicKey, rsa, RSA-PKCS1, PKCS1, crypto/rsa, padding.PKCS1v15, PKCS1v15, padding.OAEP, OAEP]
+    names: [RSA, rsaEncryption, RSAPublicKey, rsa, RSA-PKCS1, PKCS1, crypto/rsa, padding.PKCS1v15, PKCS1v15, padding.OAEP, OAEP, Crypto.Cipher.PKCS1_OAEP, Crypto.Cipher.PKCS1_v1_5]
 
   ssh-rsa:
     family: RSA
@@ -596,7 +596,32 @@ aliases:
     # The key size is 32 to 448 bits and the name never says which, so none is
     # implied here. The 64-bit block is what dates it, and that is a property of
     # the family rather than of the spelling.
-    names: [Blowfish, blowfish, BF, Crypto.Cipher.Blowfish, EVP_bf_cbc, EVP_bf_ecb, BLOWFISH]
+    names: [Blowfish, blowfish, BF, Crypto.Cipher.Blowfish, EVP_bf_cbc, EVP_bf_ecb, BLOWFISH, Crypto.Cipher._EKSBlowfish]
+
+  rc2:
+    family: RC2
+    primitive: cipher
+    source: "RFC 2268; NIST SP 800-131A Rev.2 §3 (64-bit block ciphers)"
+    # A 64-bit block, so Sweet32 applies however long the key is. The effective
+    # key length is a separate parameter from the key itself and the name states
+    # neither, so no key_size is implied here.
+    names: [RC2, ARC2, RC2-CBC, Crypto.Cipher.ARC2, EVP_rc2_cbc, EVP_rc2_ecb]
+
+  cast-128:
+    family: CAST-128
+    primitive: cipher
+    source: "RFC 2144; NIST SP 800-131A Rev.2 §3 (64-bit block ciphers)"
+    names: [CAST-128, CAST5, CAST, Crypto.Cipher.CAST, cast128-cbc, EVP_cast5_cbc]
+
+  salsa20:
+    family: Salsa20
+    primitive: cipher
+    key_size: 256
+    source: "Bernstein, Salsa20 specification (eSTREAM portfolio, 2008)"
+    # No NIST status either way, so the pack deliberately carries no verdict rule
+    # for it — see algorithms.yaml. Resolving the spelling still matters: it keeps
+    # 17 uses of one cipher from being counted as 17 unknown algorithms.
+    names: [Salsa20, salsa20, Crypto.Cipher.Salsa20, XSalsa20]
 
   rc4:
     family: RC4
@@ -609,7 +634,7 @@ aliases:
     primitive: cipher
     key_size: 256
     source: "RFC 8439"
-    names: [ChaCha20, CHACHA20, chacha20, "chacha20-poly1305@openssh.com", ChaCha20Poly1305, EVP_chacha20, EVP_chacha20_poly1305]
+    names: [ChaCha20, CHACHA20, chacha20, "chacha20-poly1305@openssh.com", ChaCha20Poly1305, EVP_chacha20, EVP_chacha20_poly1305, Crypto.Cipher.ChaCha20, Crypto.Cipher.ChaCha20_Poly1305]
 
   # ------------------------------------------------------------------------- #
   # Post-quantum algorithms — NIST FIPS 203, 204 and 205, OIDs from the CSOR.

@@ -28,11 +28,13 @@ def test_shipped_policy_pack_loads(shipped_policy_dir: Path) -> None:
     pack = load_policy(shipped_policy_dir)
 
     assert pack.version.version == "2026.09"
-    # §6's eight entries, plus the two step 6 added with citations: SHA-2,
+    # §6's eight entries, plus the two step 6 added with citations — SHA-2,
     # because §6 also requires SHA-256 to resolve to quantum_safe and the pack as
     # printed has no rule that would do it, and DH/DSA, which the pack ruled on
-    # in pqc_targets.yaml while having no verdict for them.
-    assert len(pack.algorithms) == 18
+    # in pqc_targets.yaml while having no verdict for them — plus the seven that
+    # closed demo/README.md's `unknown` table: DES, 3DES, RC4, the 64-bit block
+    # ciphers, SHA-1 used as a hash, AES with no stated size, and ChaCha20.
+    assert len(pack.algorithms) == 25
     # Seven: §6's five, plus the two the layer scoping needed — OpenSSH's own
     # key exchange, and the same ML-KEM target for a key exchange that was
     # inventoried rather than observed on a service.

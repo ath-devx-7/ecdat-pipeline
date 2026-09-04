@@ -224,18 +224,21 @@ def test_a_stated_primitive_must_be_observed_not_assumed(pack) -> None:
     assert unobserved.primitive is Primitive.UNKNOWN
 
 
-def test_a_hash_use_of_sha1_hits_nothing_while_a_signature_use_is_broken(pack) -> None:
-    """demo/README.md's gap table, stated as a test.
+def test_sha1_is_broken_in_either_use(pack) -> None:
+    """The gap demo/README.md used to list, closed with a cited entry.
 
-    ``sha1-signature`` is scoped to signatures, so a bare ``hashlib.sha1()`` is
-    ``unknown`` — an honest gap in the pack, closable with a cited entry, and
-    visibly different from "assessed and fine".
+    ``sha1-signature`` is scoped to signatures, so a bare ``hashlib.sha1()`` used
+    to come back ``unknown`` — which on a dashboard sits beside "not assessed"
+    rather than beside "broken". ``sha1-hash`` covers the primitive-free case, and
+    the scoped entry stays because what it says about signatures is narrower and
+    still true.
     """
     signing = classify(finding("SHA-1", primitive=Primitive.SIGNATURE), pack)
     hashing = classify(finding("SHA-1", primitive=Primitive.HASH), pack)
 
     assert signing.verdict is Verdict.BROKEN_NOW
-    assert hashing.verdict is Verdict.UNKNOWN
+    assert hashing.verdict is Verdict.BROKEN_NOW
+    assert "sha1-signature" in {rule.id for rule in signing.matches}
 
 
 def test_an_unmeasured_key_size_satisfies_no_size_condition(pack) -> None:
@@ -248,7 +251,12 @@ def test_an_unmeasured_key_size_satisfies_no_size_condition(pack) -> None:
     aes = classify(finding("AES", key_size=None, primitive=Primitive.CIPHER), pack)
 
     assert [rule.id for rule in rsa.matches] == ["rsa-quantum", "rsa-quantum-any-use"]
-    assert aes.verdict is Verdict.UNKNOWN
+    # The size-conditioned entries stay out of it in both directions. AES still
+    # lands on a verdict, but by way of `aes-unstated-size` — which is an
+    # argument about AES having no unsafe key length, not a size comparison that
+    # quietly succeeded against a size nobody measured.
+    assert "rsa-weak-key" not in {rule.id for rule in rsa.matches}
+    assert {rule.id for rule in aes.matches} == {"aes-unstated-size"}
 
 
 def test_legacy_tls_versions_are_broken_and_current_ones_are_not(pack) -> None:
@@ -432,9 +440,10 @@ def test_the_demo_scan_produces_the_verdicts_its_readme_promises(
     assert by_family["TLS"] == {Verdict.BROKEN_NOW, Verdict.UNKNOWN}
     # sshd_config declares hmac-md5, which is MD5 used as a hash.
     assert by_family["MD5"] == {Verdict.BROKEN_NOW}
-    # …and 3DES has no entry in the pack. demo/README.md lists that as a known
-    # gap, closable with a citation. `unknown` is the honest output until then.
-    assert by_family["3DES"] == {Verdict.UNKNOWN}
+    # …and 3DES, which demo/README.md used to list as a known gap. It is a cited
+    # entry now, so the demo's `ssl_ciphers` line reads broken rather than
+    # unassessed.
+    assert by_family["3DES"] == {Verdict.BROKEN_NOW}
 
 
 # --------------------------------------------------------------------------- #

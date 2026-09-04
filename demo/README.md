@@ -525,12 +525,20 @@ papering over:
 
 | Target | Why `unknown` |
 |---|---|
-| `hashlib.sha1()`, `MessageDigest.getInstance("SHA-1")` | `sha1-signature` matches `primitive: signature`. A bare hash use is `primitive: hash` and hits nothing |
-| DES, 3DES, RC4 | `pqc_targets.yaml` has a `cipher-upgrade` rule for them, `algorithms.yaml` has no verdict entry |
 | Weak TLS 1.2 cipher suites | The pack rules on protocol versions, not on suites |
-| ChaCha20 | The pack's `quantum_safe` entries cite NIST documents, which do not cover a cipher NIST has not approved. A citation for it would have to come from somewhere else |
+| Salsa20 | Not a NIST algorithm and not a broken one. The alias table resolves the spelling so repeated uses count as one algorithm, but a verdict would need a citation that does not exist |
 | `no_path` recommendations | A `no_path` row comes from a `pqc_targets.yaml` entry that declares a `compensating_control` (isolation, tunnelling, replacement) instead of a `target`. The shipped pack has no such entry, so the status has no members — which is honest: nothing in the demo has been shown to have no upgrade path, and the advisor does not decide that on its own |
 | Cipher-suite preference, and hybrid PQC group support | Not a pack gap but a **tool** gap, and the collector says so out loud. sslyze 6.3.1 reports accepted and rejected suites but not whether the server enforces its own ordering, and it enumerates groups from nassl's `OpenSslEcNidEnum` — classical curves only, so `X25519MLKEM768` is never offered and its absence proves nothing. Both produce an explicit `confidence: low` finding rather than silence: a readiness percentage that counts *not measured* as *not present* is a number nobody should act on |
+
+Four rows left that table when a scan of pycryptodome — a library that exercises every
+cipher it ships — turned 565 findings the pack understood perfectly well into `unknown`.
+`unknown` sits beside *not assessed* on a dashboard, not beside *broken*, so DES, 3DES,
+RC4 and the 64-bit block ciphers (Blowfish, RC2, CAST-128) gained cited `broken_now`
+entries; `sha1-hash` covers the bare hash use the scoped `sha1-signature` entry never
+matched; `aes-unstated-size` rules on AES that never states a key length, which is not an
+unmeasured risk because AES has no unsafe key length; and `chacha20-safe` cites RFC 8439
+rather than the NIST documents that do not cover it. That last one had been listed here
+as needing "a citation from somewhere else" — this is that citation.
 
 The hygiene observations — hardcoded key material, high-entropy literals, key files on
 disk, expiring, expired and self-signed certificates, `ssl_prefer_server_ciphers off` —

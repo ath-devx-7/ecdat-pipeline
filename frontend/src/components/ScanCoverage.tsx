@@ -1,16 +1,15 @@
+import type { ReactNode } from "react";
 import type { ScanDiagnostics, ScanStatus } from "../api";
 import { titleCase } from "../lib/labels";
 
-// What a `partial` scan actually lost, and what a `complete` one may never have
-// looked for.
+// Why a scan's result looks the way it does, in one line.
 //
-// "This scan is partial" on its own is not an actionable sentence: an empty
-// result and a broken one read identically. Two tables replace it. The first
-// names every collector — including the ones this scan's mode never called, so
-// silence is legible — with what it was handed, what it returned, and the reason
-// it stopped. The second pairs approved files against findings per extension,
-// because 300 .go files with 0 findings is either a codebase with no crypto in
-// it or a scanner with no Go rules, and only the rule column separates them.
+// "This scan is partial" on its own is not actionable — an empty result and a
+// broken one read identically. But the answer is a sentence, not a page: the
+// banner names the collector that stopped and the extensions nothing ruled on,
+// and the per-collector and per-extension tables sit behind a disclosure for the
+// reader who wants them. An explanation long enough to push the findings below
+// the fold has replaced one problem with another.
 
 export function ScanCoverage({
   status,
@@ -24,11 +23,10 @@ export function ScanCoverage({
   if (!diagnostics) {
     if (status !== "partial") return null;
     return (
-      <div className="w-full rounded-md bg-amber-50 p-2 text-xs text-amber-900">
-        This scan is <strong>partial</strong>: at least one collector failed or ran out of
-        budget, and this scan predates per-collector reporting, so which one is not recorded.
-        The findings below are incomplete, not wrong.
-      </div>
+      <Banner tone="warn">
+        This scan is <strong>partial</strong> and predates per-collector reporting, so which
+        collector degraded is not recorded. The findings are incomplete, not wrong.
+      </Banner>
     );
   }
 
@@ -36,52 +34,60 @@ export function ScanCoverage({
   const blind = diagnostics.extensions.filter(
     (entry) => entry.code_scanned && !entry.ruled && entry.approved_files > 0,
   );
-
-  // Nothing broke and every scanned extension had a rule behind it: there is no
-  // gap to explain, so no panel.
-  if (status !== "partial" && degraded.length === 0 && blind.length === 0) return null;
-
   const partial = status === "partial";
-  const tone = partial ? "bg-amber-50 text-amber-900" : "bg-slate-50 text-slate-700";
+
+  // Nothing broke and every scanned extension had a rule behind it.
+  if (!partial && degraded.length === 0 && blind.length === 0) return null;
+
+  const blindFiles = blind.reduce((total, entry) => total + entry.approved_files, 0);
 
   return (
-    <div className={`w-full rounded-md p-3 text-xs ${tone}`}>
-      <p>
-        {partial ? (
+    <Banner tone={partial ? "warn" : "muted"}>
+      <span>
+        {partial && (
           <>
-            This scan is <strong>partial</strong>: the findings below are incomplete, not
-            wrong.{" "}
-            {degraded.length > 0
-              ? `${degraded.length} collector${degraded.length === 1 ? "" : "s"} degraded.`
-              : "No collector reported a failure — the gap is in coverage, below."}
-          </>
-        ) : (
-          <>
-            This scan completed, but{" "}
-            <strong>
-              {blind.length} scanned extension{blind.length === 1 ? "" : "s"}
-            </strong>{" "}
-            had no rule behind {blind.length === 1 ? "it" : "them"}. Zero findings there means
-            nothing was looked for.
+            <strong>Partial scan</strong> — findings are incomplete, not wrong.{" "}
           </>
         )}
-      </p>
-
-      <CollectorTable diagnostics={diagnostics} />
-      <ExtensionTable diagnostics={diagnostics} />
-    </div>
+        {degraded.length > 0 && (
+          <>
+            {degraded.map((run) => titleCase(run.name)).join(", ")} stopped early
+            {degraded[0].reason ? `: ${degraded[0].reason}` : ""}.{" "}
+          </>
+        )}
+        {blind.length > 0 && (
+          <>
+            {blindFiles} file{blindFiles === 1 ? "" : "s"} in{" "}
+            {blind.map((entry) => entry.extension).join(", ")} had no rule behind{" "}
+            {blind.length === 1 ? "it" : "them"} — zero findings there means nothing was
+            looked for.
+          </>
+        )}
+      </span>{" "}
+      <details className="mt-1">
+        <summary className="cursor-pointer underline">Coverage detail</summary>
+        <CollectorTable diagnostics={diagnostics} />
+        <ExtensionTable diagnostics={diagnostics} />
+      </details>
+    </Banner>
   );
+}
+
+function Banner({ tone, children }: { tone: "warn" | "muted"; children: ReactNode }) {
+  const palette =
+    tone === "warn" ? "bg-amber-50 text-amber-900" : "bg-slate-50 text-slate-700";
+  return <div className={`w-full rounded-md p-2 text-xs ${palette}`}>{children}</div>;
 }
 
 function CollectorTable({ diagnostics }: { diagnostics: ScanDiagnostics }) {
   if (diagnostics.collectors.length === 0) return null;
   return (
-    <div className="mt-3 overflow-x-auto">
-      <table className="w-full min-w-[32rem] text-left">
+    <div className="mt-2 overflow-x-auto">
+      <table className="w-full min-w-[30rem] text-left">
         <thead className="text-[0.65rem] uppercase tracking-wide opacity-70">
           <tr>
             <th className="py-1 pr-3 font-medium">Collector</th>
-            <th className="py-1 pr-3 font-medium">Files handed</th>
+            <th className="py-1 pr-3 font-medium">Files</th>
             <th className="py-1 pr-3 font-medium">Findings</th>
             <th className="py-1 pr-3 font-medium">Time</th>
             <th className="py-1 font-medium">Result</th>
@@ -116,16 +122,13 @@ function CollectorTable({ diagnostics }: { diagnostics: ScanDiagnostics }) {
 function ExtensionTable({ diagnostics }: { diagnostics: ScanDiagnostics }) {
   // Already ordered by approved files descending: the extension with the most
   // files and the fewest findings is the one worth looking at.
-  const rows = diagnostics.extensions.filter((entry) => entry.approved_files > 0).slice(0, 12);
+  const rows = diagnostics.extensions.filter((entry) => entry.approved_files > 0).slice(0, 10);
   if (rows.length === 0) return null;
   const hidden = diagnostics.extensions.length - rows.length;
 
   return (
-    <div className="mt-3 overflow-x-auto">
-      <div className="text-[0.65rem] uppercase tracking-wide opacity-70">
-        Approved files against findings, by extension
-      </div>
-      <table className="mt-1 w-full min-w-[32rem] text-left">
+    <div className="mt-2 overflow-x-auto">
+      <table className="w-full min-w-[30rem] text-left">
         <thead className="text-[0.65rem] uppercase tracking-wide opacity-70">
           <tr>
             <th className="py-1 pr-3 font-medium">Extension</th>
@@ -154,9 +157,7 @@ function ExtensionTable({ diagnostics }: { diagnostics: ScanDiagnostics }) {
         </tbody>
       </table>
       {hidden > 0 && (
-        <p className="mt-1 opacity-70">
-          {hidden} further extension{hidden === 1 ? "" : "s"} not shown.
-        </p>
+        <p className="mt-1 opacity-70">{hidden} further extensions not shown.</p>
       )}
     </div>
   );

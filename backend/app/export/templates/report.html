@@ -54,7 +54,13 @@
   {% if scan.probe_targets %}
   <tr><th>Probe targets</th><td class="mono">{% for t in scan.probe_targets %}{{ t.host }}:{{ t.port }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
   {% endif %}
-  <tr><th>Status</th><td>{{ scan.status.value }}{% if scan.status.value == "partial" %} — at least one collector failed or ran out of budget; the findings are incomplete, not wrong{% endif %}</td></tr>
+  <tr><th>Status</th><td>{{ scan.status.value }}{% if scan.status.value == "partial" %} — the findings are incomplete, not wrong{% endif %}</td></tr>
+  {% if degraded %}
+  <tr><th>Degraded</th><td>{% for run in degraded %}<strong>{{ run.name }}</strong> — {{ run.reason }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>
+  {% endif %}
+  {% if unruled %}
+  <tr><th>Not covered</th><td>{% for row in unruled %}{{ row.approved_files }} × <span class="mono">{{ row.extension }}</span>{% if not loop.last %}, {% endif %}{% endfor %} — approved and scanned, but no rule covers the language, so zero findings there means nothing was looked for</td></tr>
+  {% endif %}
   <tr><th>Created / completed (UTC)</th><td>{{ scan.created_at.strftime("%Y-%m-%d %H:%M") if scan.created_at else "—" }} / {{ scan.completed_at.strftime("%Y-%m-%d %H:%M") if scan.completed_at else "—" }}</td></tr>
   <tr><th>Data lifetime (X)</th><td>{{ scan.data_lifetime_years if scan.data_lifetime_years is not none else "not supplied" }} years</td></tr>
   <tr><th>Migration duration (Y)</th><td>{{ y_years }} years (policy default)</td></tr>
@@ -74,7 +80,7 @@
   <div class="tile"><div class="t">{{ status_titles[status] }}</div><div class="n">{{ status_counts[status] }}</div></div>
   {% endfor %}
 </div>
-<p class="small muted">Readiness is the share of assessed findings the policy pack classified as quantum-safe. Unassessed findings are excluded and counted beside it: "not assessed" is neither safe nor vulnerable. All four recommendation statuses are shown; reporting only the recommended ones would hide the hard part of the migration.{% if hidden_count %} {{ hidden_count }} quantum-safe finding{{ "" if hidden_count == 1 else "s" }} {{ "is" if hidden_count == 1 else "are" }} kept in the store and not listed in this report.{% endif %}</p>
+<p class="small muted">Rows in the wave tables below are grouped: identical uses of one algorithm in one file, with the same verdict and the same recommendation, are one row carrying the number of uses and their line numbers. Nothing is merged in the store, the findings API or the CycloneDX export — one observation is still one record there. Readiness is the share of assessed findings the policy pack classified as quantum-safe. Unassessed findings are excluded and counted beside it: "not assessed" is neither safe nor vulnerable. All four recommendation statuses are shown; reporting only the recommended ones would hide the hard part of the migration.{% if hidden_count %} {{ hidden_count }} quantum-safe finding{{ "" if hidden_count == 1 else "s" }} {{ "is" if hidden_count == 1 else "are" }} kept in the store and not listed in this report.{% endif %}</p>
 
 <div class="two">
   <div>
@@ -116,7 +122,7 @@
     <td class="verdict">{% if row.verdict %}<span class="badge {{ row.verdict.verdict.value }}">{{ row.verdict_title }}</span><div class="small">{{ row.verdict.source_citation }}</div>{% endif %}</td>
     <td>{% if row.score.urgency_years is not none %}+{{ row.score.urgency_years }} y{% else %}<span class="muted">n/a</span>{% endif %}</td>
     <td>{% for rec in row.recommendations %}<span class="badge {{ rec.status.value }}">{{ status_titles[rec.status.value] }}</span> {{ rec.target or "" }}{% if rec.action_class %} <span class="small muted">({{ rec.action_class.value }})</span>{% endif %}<br>{% endfor %}</td>
-    <td class="mono">{{ row.finding.evidence_location }}<div class="small muted" style="font-family:sans-serif">{{ row.finding.collector.value }} · {{ row.finding.source_layer.value }} · {{ row.finding.confidence.value }}</div></td>
+    <td class="mono">{% if row.occurrences > 1 %}{{ row.finding.evidence_location.rsplit(":", 1)[0] }}<div class="small" style="font-family:sans-serif"><strong>{{ row.occurrences }} uses</strong> · lines {{ row.lines[:8]|join(", ") }}{% if row.lines|length > 8 %} and {{ row.lines|length - 8 }} more{% endif %}</div>{% else %}{{ row.finding.evidence_location }}{% endif %}<div class="small muted" style="font-family:sans-serif">{{ row.finding.collector.value }} · {{ row.finding.source_layer.value }} · {{ row.finding.confidence.value }}</div></td>
   </tr>
   {% endfor %}
   </tbody>

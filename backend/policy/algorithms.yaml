@@ -91,6 +91,57 @@ entries:
     source: "NIST FIPS 203, 204 and 205"
 
   # ------------------------------------------------------------------------- #
+  # Symmetric algorithms that are broken today.
+  #
+  # These were missing, and their absence did not read as a gap: a DES finding
+  # came back `unknown`, which on a dashboard sits beside "not assessed" rather
+  # than beside "broken". A scan of one crypto library produced 565 findings the
+  # pack understood perfectly well and declined to rule on.
+  # ------------------------------------------------------------------------- #
+
+  - id: des-broken
+    family: DES
+    verdict: broken_now
+    source: "NIST SP 800-131A Rev.2 §3 (two-key and single DES disallowed)"
+
+  - id: triple-des-broken
+    family: 3DES
+    verdict: broken_now
+    source: "NIST SP 800-131A Rev.2 §3 (three-key TDEA disallowed after 2023)"
+
+  - id: rc4-broken
+    family: RC4
+    verdict: broken_now
+    source: "RFC 7465 (prohibiting RC4 cipher suites)"
+
+  # One entry rather than three: what is wrong with them is the same thing, the
+  # 64-bit block, and the citation is the same.
+  - id: legacy-64-bit-block-cipher
+    family: [Blowfish, RC2, CAST-128]
+    verdict: broken_now
+    source: "NIST SP 800-131A Rev.2 §3; Sweet32 (CVE-2016-2183) — 64-bit block ciphers"
+
+  - id: sha1-hash
+    family: SHA-1
+    verdict: broken_now
+    source: "NIST SP 800-131A Rev.2 §9 (SHA-1 disallowed for digital signature generation; NIST SP 800-107 Rev.1 §5.1 on collision resistance)"
+
+  # AES is defined only for 128, 192 and 256 bits, so a use that never states a
+  # size is not an unmeasured risk — there is no unsafe AES key length to have
+  # measured. `aes-safe` above keeps the explicit threshold for a finding that
+  # does state one, and sorts before this by id, so it stays the rule of record
+  # there. CLAUDE.md: AES is quantum_safe, never quantum_vulnerable.
+  - id: aes-unstated-size
+    family: AES
+    verdict: quantum_safe
+    source: "FIPS 197 §5 (key lengths 128, 192, 256); NIST IR 8547"
+
+  - id: chacha20-safe
+    family: ChaCha20
+    verdict: quantum_safe
+    source: "RFC 8439; NIST IR 8547 (symmetric ciphers at 256-bit keys)"
+
+  # ------------------------------------------------------------------------- #
   # Hygiene — observations that are not algorithms but were assessed all the
   # same. The collectors emit these under their own marker names (§7.1, §7.3,
   # §7.4). Without an entry here each one fell to `unknown`, which inflated the

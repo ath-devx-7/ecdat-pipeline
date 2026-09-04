@@ -46,6 +46,15 @@
 #   algorithm         literal spelling when the pattern fixes it
 #   algorithm_prefix  prepended to a captured `algorithm` (`algorithms.` so the
 #                     finding reads `algorithms.TripleDES`, as the source does)
+#   algorithm_in      the complete set of spellings a captured `algorithm` may
+#                     take. A capture outside it is DROPPED rather than recorded.
+#                     Needed wherever a rule captures a name it does not fully
+#                     control: a metavariable-regex bounds what Semgrep MATCHES,
+#                     not what it interpolates into the message, and the two
+#                     differ for an aliased import (see app/collectors/code.py).
+#                     Every spelling listed must have an entry in
+#                     policy/algorithm_aliases.yaml — a test enforces that, so a
+#                     rule cannot move a finding from absent to unknown.
 #   primitive         hash | cipher | signature | key_exchange | protocol
 #   mode              ECB, CBC — when the pattern itself fixes the mode
 #   observation       tag stored in evidence_raw
@@ -145,20 +154,31 @@ rules:
 
   # pycryptodome. The import is required rather than assumed: `DES.new(key)` on
   # its own is a name this rule has no reason to believe is a cipher.
+  #
+  # `algorithm_in` is the whole module list, not a shortlist of weak ones — §7.1
+  # says the rules inventory rather than judge, and an AES use the roadmap never
+  # saw is the failure this file exists to prevent. It is exhaustive so that
+  # `Crypto.Cipher.<anything>` cannot reach the store under a family the alias
+  # table has never heard of.
   - id: ecdat.python.pycryptodome-cipher
     languages: [python]
     severity: INFO
     message: ecdat|algorithm=$ALG
-    patterns:
-      - pattern-either:
-          - pattern: Crypto.Cipher.$ALG.new(...)
-          - patterns:
-              - pattern-inside: |
-                  from Crypto.Cipher import $ALG
-                  ...
-              - pattern: $ALG.new(...)
+    pattern-either:
+      - pattern: Crypto.Cipher.$ALG.new(...)
+      - patterns:
+          - pattern-inside: |
+              from Crypto.Cipher import $ALG
+              ...
+          - pattern: $ALG.new(...)
     metadata:
-      ecdat: { algorithm_prefix: "Crypto.Cipher.", primitive: cipher, observation: cipher_constructor }
+      ecdat:
+        algorithm_prefix: "Crypto.Cipher."
+        primitive: cipher
+        observation: cipher_constructor
+        algorithm_in:
+          [AES, ARC2, ARC4, Blowfish, CAST, ChaCha20, ChaCha20_Poly1305, DES,
+           DES3, PKCS1_OAEP, PKCS1_v1_5, Salsa20, _EKSBlowfish]
 
   - id: ecdat.python.pycryptodome-rsa-keygen
     languages: [python]

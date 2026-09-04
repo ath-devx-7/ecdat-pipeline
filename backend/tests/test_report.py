@@ -13,7 +13,7 @@ from uuid import UUID
 
 import pytest
 
-from app.export.pdf import pdf_available, render_html, render_pdf
+from app.export.pdf import pdf_available, render_html, render_pdf, report_context
 from app.models.enums import ScanMode, ScanStatus, SourceType
 from app.models.scan import Scan
 
@@ -185,3 +185,85 @@ def test_when_weasyprint_is_unavailable_the_endpoint_says_so(client, demo_scan, 
     assert response.status_code == 503
     assert "Pango" in response.json()["detail"]
     assert "report.html" in response.json()["detail"]
+
+
+def test_repeated_uses_of_one_algorithm_in_one_file_are_one_row(demo_scan, db_session) -> None:
+    """A library that calls AES 62 times in one module has one thing to change there.
+
+    Sixty-two identical rows bury every row that is not identical, so the wave
+    tables group them — and only them: the key carries the file, the verdict, the
+    urgency and the recommended target, so nothing that reads differently merges.
+    """
+    from app.export.pdf import _group_key, _grouped
+
+    scan = db_session.get(Scan, UUID(demo_scan["scan_id"]))
+    context = report_context(db_session, scan)
+
+    for items in context["waves"].values():
+        # Every row carries its count, and the keys within a wave are distinct.
+        assert all(row["occurrences"] >= 1 for row in items)
+        assert len({_group_key(row) for row in items}) == len(items)
+
+    # The headline number stays a count of findings, not of rows, or the report
+    # disagrees with the dashboard about how much there is.
+    for wave, items in context["waves"].items():
+        assert context["wave_counts"][wave] == sum(row["occurrences"] for row in items)
+
+
+def test_grouping_keeps_rows_that_read_differently_apart() -> None:
+    """Same algorithm, same file — but a different verdict is a different row."""
+    from types import SimpleNamespace
+
+    from app.export.pdf import _grouped
+
+    def row(line: int, verdict: str, file: str = "app/crypto.py"):
+        return {
+            "finding": SimpleNamespace(
+                evidence_location=f"{file}:{line}",
+                algorithm_name="Crypto.Cipher.AES",
+                primitive=SimpleNamespace(value="cipher"),
+                collector=SimpleNamespace(value="code"),
+                source_layer=SimpleNamespace(value="source"),
+            ),
+            "label": "AES",
+            "verdict": SimpleNamespace(verdict=SimpleNamespace(value=verdict)),
+            "score": SimpleNamespace(urgency_years=None),
+            "recommendations": [],
+        }
+
+    same = _grouped([row(10, "quantum_safe"), row(24, "quantum_safe"), row(31, "quantum_safe")])
+    assert [entry["occurrences"] for entry in same] == [3]
+    assert same[0]["lines"] == ["10", "24", "31"]
+
+    differing = _grouped([row(10, "quantum_safe"), row(24, "broken_now")])
+    assert [entry["occurrences"] for entry in differing] == [1, 1]
+
+    other_file = _grouped([row(10, "quantum_safe"), row(10, "quantum_safe", "app/other.py")])
+    assert [entry["occurrences"] for entry in other_file] == [1, 1]
+
+
+def test_the_report_names_the_collector_that_degraded(demo_scan, db_session) -> None:
+    """"Something failed" is not actionable in a PDF any more than on a screen."""
+    scan = db_session.get(Scan, UUID(demo_scan["scan_id"]))
+    scan.diagnostics = {
+        "collectors": [
+            {"name": "code", "ran": True, "reason": "PartialParsing at src/ARC4.c"},
+            {"name": "certs", "ran": True, "reason": None},
+            {"name": "network", "ran": False, "reason": None},
+        ],
+        "extensions": [
+            {"extension": ".rs", "approved_files": 12, "finding_count": 0,
+             "code_scanned": True, "ruled": False},
+            {"extension": ".py", "approved_files": 4, "finding_count": 9,
+             "code_scanned": True, "ruled": True},
+        ],
+    }
+    db_session.flush()
+
+    html = render_html(db_session, scan)
+
+    assert "PartialParsing at src/ARC4.c" in html
+    assert "12 &#215; <span class=\"mono\">.rs</span>" in html or "12 × " in html
+    # A collector that ran cleanly, and one the mode never called, are not listed
+    # as degraded.
+    assert "certs" not in html.split("Degraded")[1].split("</tr>")[0]

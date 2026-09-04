@@ -401,7 +401,14 @@ def _problems(run: SemgrepRun) -> list[str]:
     for error in run.document.get("errors") or ():
         if not isinstance(error, Mapping):
             continue
-        kind = str(error.get("type") or "error")
+        # Semgrep reports `type` as a bare string for most errors but as
+        # ["PartialParsing", [ ...every offending range... ]] for a parse
+        # failure. Stringifying that gives a screenful of JSON where a reason is
+        # wanted, and this text is what the dashboard banner and the report show.
+        raw_kind = error.get("type")
+        if isinstance(raw_kind, (list, tuple)) and raw_kind:
+            raw_kind = raw_kind[0]
+        kind = str(raw_kind or "error")
         where = error.get("path")
         message = str(error.get("message") or "").strip().splitlines()[:1]
         detail = f" ({message[0][:120]})" if message else ""
@@ -548,7 +555,29 @@ def _finding_for(
     algorithm = meta.get("algorithm")
     mode = meta.get("mode")
     if algorithm is None and "algorithm" in fields:
-        algorithm = f"{meta.get('algorithm_prefix', '')}{fields['algorithm']}"
+        captured = fields["algorithm"]
+        # `algorithm_in` bounds what a capture may produce, and it is enforced
+        # here rather than in the rule because a metavariable-regex does NOT
+        # bound the message. Semgrep matches `from Crypto.Cipher import $ALG`
+        # against the *imported* name — so a regex sees `PKCS1_v1_5` and passes —
+        # while the message interpolates the *local* binding from
+        # `import PKCS1_v1_5 as PKCS`. Without this guard the rule emits
+        # `Crypto.Cipher.PKCS`, which resolves to nothing and lands on the
+        # dashboard as its own invented family. Dropping the finding is the
+        # lesser harm: an unresolvable spelling is worse than a missing one,
+        # because it gets counted (§8).
+        allowed = meta.get("algorithm_in")
+        if allowed is not None and captured not in allowed:
+            logger.debug(
+                "code: rule %s captured %r, which is not one of the spellings it "
+                "declares; skipped at %s:%d",
+                rule_id,
+                captured,
+                path,
+                start,
+            )
+            return None
+        algorithm = f"{meta.get('algorithm_prefix', '')}{captured}"
     transformation = fields.get("transformation")
     if transformation:
         # Java's "ALG/MODE/PADDING". The algorithm and the mode are two facts
