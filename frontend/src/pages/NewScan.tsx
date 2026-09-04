@@ -13,6 +13,54 @@ const LIFETIMES: { label: string; years: number }[] = [
   { label: "20+ years", years: 20 },
 ];
 
+// `webkitdirectory` is what turns a file input into a folder picker, and it is
+// not in React's typings; spread as a plain record rather than cast away the
+// props type of the whole element.
+const DIRECTORY_PICKER: Record<string, string> = { webkitdirectory: "", directory: "" };
+
+// Dropped before anything is sent. These are build output and vendored trees:
+// they are not deployed artefacts, and they would consume the per-scan file cap
+// before a single source file reached the approval screen. Here it also costs
+// upload time, because every one of them would go over the wire first.
+const SKIPPED_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "dist",
+  "build",
+]);
+
+export interface PickedFolder {
+  // the folder the user picked, which is the first segment of every path
+  name: string;
+  // what will actually be uploaded, after `pickable`
+  files: File[];
+  // how many the filter dropped, so the count on screen is never silently short
+  skipped: number;
+}
+
+// An upload's `source_ref` is the upload id, which is a UUID and says nothing
+// to a person. Everything else names itself.
+export function scanLabel(scan: Scan): string {
+  if (scan.source_type === "upload") return "Uploaded folder";
+  const probed = scan.probe_targets?.map((target) => `${target.host}:${target.port}`).join(", ");
+  return scan.source_ref || probed || scan.id;
+}
+
+export function folderName(files: File[]): string {
+  const first = files[0]?.webkitRelativePath ?? "";
+  return first.split("/")[0] || "the chosen folder";
+}
+
+export function pickable(files: File[]): File[] {
+  return files.filter((file) => {
+    const relative = file.webkitRelativePath || file.name;
+    return !relative.split("/").some((segment) => SKIPPED_DIRS.has(segment));
+  });
+}
+
 export function parseTargets(text: string): ProbeTarget[] {
   return text
     .split(/[\n,]/)
@@ -28,12 +76,18 @@ export default function NewScan() {
   const navigate = useNavigate();
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [mode, setMode] = useState<ScanMode>("files");
-  const [sourceType, setSourceType] = useState<SourceType>("folder");
+  // "Local folder" is the browse-and-upload control, so the default source type
+  // is `upload`: the backend's `folder` type still reads a path in place, but
+  // that needs a path on the *server*, which is not something a browser can
+  // offer. The API keeps it for callers that do know one.
+  const [sourceType, setSourceType] = useState<SourceType>("upload");
   const [sourceRef, setSourceRef] = useState("");
+  const [upload, setUpload] = useState<PickedFolder | null>(null);
   const [targets, setTargets] = useState("");
   const [lifetime, setLifetime] = useState(20);
   const [z, setZ] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<Scan[]>([]);
 
@@ -47,16 +101,42 @@ export default function NewScan() {
 
   const wantsFiles = mode !== "probe_only";
   const wantsProbe = mode !== "files";
+  const wantsUpload = wantsFiles && sourceType === "upload";
+
+  function choose(chosen: FileList | null) {
+    const all = Array.from(chosen ?? []);
+    if (all.length === 0) return; // picker dismissed; keep the previous choice
+    const files = pickable(all);
+    setUpload({ name: folderName(all), files, skipped: all.length - files.length });
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
     setBusy(true);
     try {
+      // Two steps, so POST /api/scans stays a JSON body: the bytes go to
+      // /api/uploads and the scan names the id that comes back.
+      let ref = sourceRef.trim();
+      if (wantsUpload) {
+        if (!upload) throw new Error("Choose a folder to upload first.");
+        if (!upload.files.length) {
+          throw new Error(
+            `Every file in ${upload.name} was left behind as build output or a vendored ` +
+              "dependency. Pick a folder holding source, config or certificates.",
+          );
+        }
+        setUploading(true);
+        try {
+          ref = (await api.uploadFolder(upload.files)).upload_id;
+        } finally {
+          setUploading(false);
+        }
+      }
       const scan = await api.createScan({
         mode,
         source_type: wantsFiles ? sourceType : "none",
-        source_ref: wantsFiles ? sourceRef.trim() : undefined,
+        source_ref: wantsFiles ? ref : undefined,
         probe_targets: wantsProbe ? parseTargets(targets) : [],
         data_lifetime_years: lifetime,
       });
@@ -106,29 +186,68 @@ export default function NewScan() {
                 value={sourceType}
                 onChange={(e) => setSourceType(e.target.value as SourceType)}
               >
-                <option value="folder">Local folder</option>
+                <option value="upload">Local folder</option>
                 <option value="github">Git repository</option>
                 <option value="docker_image">Docker image</option>
               </select>
             </div>
             <div className="sm:col-span-2">
-              <label className="label" htmlFor="source_ref">
-                {sourceType === "folder" ? "Path" : sourceType === "github" ? "Clone URL" : "Image tag"}
-              </label>
-              <input
-                id="source_ref"
-                className="input"
-                value={sourceRef}
-                onChange={(e) => setSourceRef(e.target.value)}
-                placeholder={
-                  sourceType === "folder"
-                    ? "/absolute/path/to/ecdat_pipeline/demo"
-                    : sourceType === "github"
-                      ? "https://github.com/org/repo.git"
-                      : "registry/image:tag"
-                }
-                required
-              />
+              {wantsUpload ? (
+                <>
+                  <span className="label">Folder</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* The input is the control and the label is what it looks
+                        like: a file input cannot be styled, and a button cannot
+                        open a folder picker without one behind it. */}
+                    <label className="btn-secondary cursor-pointer">
+                      <input
+                        type="file"
+                        multiple
+                        {...DIRECTORY_PICKER}
+                        className="sr-only"
+                        onChange={(e) => choose(e.target.files)}
+                      />
+                      {upload ? "Choose a different folder…" : "Browse…"}
+                    </label>
+                    {upload && (
+                      <span className="truncate text-sm text-slate-700">
+                        <span className="mono">{upload.name}</span> &mdash;{" "}
+                        {upload.files.length} file{upload.files.length === 1 ? "" : "s"}
+                        {upload.skipped > 0 && ` (${upload.skipped} skipped)`}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {!upload
+                      ? "Pick a folder anywhere on this machine. Your browser asks you to confirm before it reads it."
+                      : upload.skipped > 0
+                        ? `Left behind: ${[...SKIPPED_DIRS].join(", ")}. Build output and vendored trees are not deployed artefacts, and they would consume the file cap before a single source file reached the approval screen.`
+                        : "Ready to upload."}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    The bytes are stored on the ECDAT host, but nothing is read from them until
+                    you approve paths on the next screen.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <label className="label" htmlFor="source_ref">
+                    {sourceType === "github" ? "Clone URL" : "Image tag"}
+                  </label>
+                  <input
+                    id="source_ref"
+                    className="input"
+                    value={sourceRef}
+                    onChange={(e) => setSourceRef(e.target.value)}
+                    placeholder={
+                      sourceType === "github"
+                        ? "https://github.com/org/repo.git"
+                        : "registry/image:tag"
+                    }
+                    required
+                  />
+                </>
+              )}
             </div>
           </div>
         )}
@@ -197,7 +316,13 @@ export default function NewScan() {
         {error && <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>}
 
         <button className="btn" disabled={busy}>
-          {busy ? "Staging…" : wantsFiles ? "Stage and choose files" : "Probe now"}
+          {uploading
+            ? "Uploading…"
+            : busy
+              ? "Staging…"
+              : wantsFiles
+                ? "Stage and choose files"
+                : "Probe now"}
         </button>
       </form>
 
@@ -211,7 +336,7 @@ export default function NewScan() {
                 to={scan.status === "awaiting_approval" ? `/scans/${scan.id}/files` : `/scans/${scan.id}`}
                 className="font-medium text-slate-900 hover:underline"
               >
-                {scan.source_ref ?? scan.probe_targets?.map((t) => `${t.host}:${t.port}`).join(", ") ?? scan.id}
+                {scanLabel(scan)}
               </Link>
               <div className="text-xs text-slate-500">
                 {titleCase(scan.mode)} · {titleCase(scan.status)} · {scan.created_at?.slice(0, 16).replace("T", " ")}

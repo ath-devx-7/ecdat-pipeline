@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import findings, scans
+from app.api import findings, scans, uploads
 from app.startup import initialise
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ app = FastAPI(
 )
 
 app.include_router(scans.router)
+app.include_router(uploads.router)
 app.include_router(findings.router)
 
 

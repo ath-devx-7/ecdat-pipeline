@@ -29,6 +29,7 @@ __all__ = [
     "ScanCreate",
     "ScanDiagnosticsView",
     "ScanResponse",
+    "UploadResponse",
     "build_tree",
 ]
 
@@ -78,7 +79,7 @@ class ScanCreate(BaseModel):
             if self.source_type is SourceType.NONE:
                 raise ValueError(
                     f"mode '{self.mode.value}' needs a source_type of "
-                    "folder, github or docker_image"
+                    "folder, upload, github or docker_image"
                 )
             if not (self.source_ref or "").strip():
                 raise ValueError(f"mode '{self.mode.value}' needs a source_ref")
@@ -102,6 +103,19 @@ class ScanCreate(BaseModel):
                 f"mode '{self.mode.value}' does not probe, so probe_targets must be empty"
             )
         return self
+
+
+class UploadResponse(BaseModel):
+    """``POST /api/uploads`` — what the browser's folder became.
+
+    ``upload_id`` is the ``source_ref`` of the scan that follows. The counts are
+    what was actually written, not what the request declared: they are how the
+    UI can say "3 412 files stored" before anyone approves a single one of them.
+    """
+
+    upload_id: UUID
+    file_count: int
+    total_bytes: int
 
 
 class CollectorRunSummary(BaseModel):

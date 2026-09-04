@@ -108,7 +108,13 @@ def test_scans_table_carries_the_scan_scope_fields() -> None:
 def test_enum_values_are_the_spec_strings() -> None:
     """Enums store their values, not their Python member names."""
     assert [m.value for m in ScanMode] == ["probe_only", "files", "files_and_probe"]
-    assert [m.value for m in SourceType] == ["folder", "github", "docker_image", "none"]
+    assert [m.value for m in SourceType] == [
+        "folder",
+        "github",
+        "docker_image",
+        "upload",
+        "none",
+    ]
     assert [m.value for m in ScanStatus] == [
         "staging",
         "awaiting_approval",

@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     # Where staged sources land. `folder` sources are read in place and never copied.
     work_root: Path = Path("/tmp/ecdat")
 
+    #: Total bytes one browser upload may carry, across all its parts. The
+    #: file-count cap above applies to an upload too; this is the second half,
+    #: because 5000 files is a very different amount of disk depending on what
+    #: they are.
+    max_upload_bytes: int = 512 * 1024 * 1024
+    #: How long an upload tree nobody turned into a scan survives. Swept at
+    #: startup: an upload is copied bytes we own, so leaving abandoned ones on
+    #: disk for ever would quietly make `ephemeral` a lie.
+    upload_retention_hours: int = 24
+
     # Staging subprocess budgets. Cloning and `docker save` are the only two
     # outbound operations in the product, and both are user-initiated (§1).
     git_clone_timeout_seconds: int = 300

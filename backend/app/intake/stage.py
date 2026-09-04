@@ -1,9 +1,11 @@
 """Staging — a user-named source becomes a directory on disk (SPEC.md §4 step 2).
 
-Three source types, one output: a work directory that the surface scan walks
+Four source types, one output: a work directory that the surface scan walks
 and that every later collector resolves approved paths against.
 
 * ``folder``       — used in place. Nothing is copied.
+* ``upload``       — already on disk: ``app/intake/upload.py`` wrote the tree
+  when the browser posted it, and this only resolves and checks it.
 * ``github``       — ``git clone --depth 1`` into the work root.
 * ``docker_image`` — ``docker save``, then each layer tar extracted in
   manifest order into one merged tree.
@@ -29,6 +31,7 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 from app.config import Settings, get_settings
+from app.intake.upload import uploads_root
 from app.models.enums import SourceType
 
 logger = logging.getLogger(__name__)
@@ -65,15 +68,20 @@ def work_dir_for(
 ) -> Path:
     """The work directory for a scan, derived rather than stored.
 
-    ``folder`` sources live wherever the user said; everything else is unpacked
-    under ``work_root/{scan_id}``. Later steps re-derive this from the ``scans``
-    row instead of persisting a path that could go stale.
+    ``folder`` sources live wherever the user said and ``upload`` sources under
+    the upload id the browser was given; everything else is unpacked under
+    ``work_root/{scan_id}``. Later steps re-derive this from the ``scans`` row
+    instead of persisting a path that could go stale.
     """
     settings = settings or get_settings()
     if source_type is SourceType.FOLDER:
         if not source_ref:
             raise StagingError("A folder scan needs a source_ref naming the directory.")
         return Path(source_ref).expanduser().resolve()
+    if source_type is SourceType.UPLOAD:
+        if not source_ref:
+            raise StagingError("An upload scan needs a source_ref naming the upload.")
+        return uploads_root(settings) / str(_upload_id(source_ref))
     return (Path(settings.work_root) / str(scan_id)).resolve()
 
 
@@ -96,6 +104,8 @@ def stage_source(
 
     if source_type is SourceType.FOLDER:
         return _stage_folder(source_ref)
+    if source_type is SourceType.UPLOAD:
+        return _stage_upload(source_ref, settings)
     if source_type is SourceType.GITHUB:
         return _stage_github(scan_id, source_ref, settings)
     if source_type is SourceType.DOCKER_IMAGE:
@@ -118,6 +128,40 @@ def _stage_folder(source_ref: str) -> StagedSource:
     if not resolved.is_dir():
         raise StagingError(f"Not a directory: {resolved}")
     return StagedSource(work_dir=resolved, source_type=SourceType.FOLDER, ephemeral=False)
+
+
+# --------------------------------------------------------------------------- #
+# upload
+# --------------------------------------------------------------------------- #
+
+
+def _upload_id(source_ref: str) -> UUID:
+    """The ref is an upload id and nothing else.
+
+    Parsing it as a UUID is the whole path check: a value that survives this
+    cannot contain a separator, a ``..`` or a drive letter, so joining it onto
+    the upload root can only ever name a direct child of that root.
+    """
+    try:
+        return UUID(source_ref.strip())
+    except (AttributeError, ValueError) as exc:
+        raise StagingError(
+            f"{source_ref!r} is not an upload id. Post the folder to /api/uploads first "
+            "and use the upload_id it returns as source_ref."
+        ) from exc
+
+
+def _stage_upload(source_ref: str, settings: Settings) -> StagedSource:
+    """Bytes the browser already sent us. Ephemeral: we wrote them, we may delete them."""
+    upload_id = _upload_id(source_ref)
+    destination = uploads_root(settings) / str(upload_id)
+    if not destination.is_dir():
+        raise StagingError(
+            f"Upload {upload_id} was not found. Uploads are kept for "
+            f"{settings.upload_retention_hours}h and are swept after that; post the folder "
+            "again."
+        )
+    return StagedSource(work_dir=destination, source_type=SourceType.UPLOAD, ephemeral=True)
 
 
 # --------------------------------------------------------------------------- #

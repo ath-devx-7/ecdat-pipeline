@@ -94,6 +94,12 @@ $env:ECDAT_DATABASE_URL = "postgresql+psycopg://ecdat:ecdat@localhost:5432/ecdat
 alembic upgrade head
 ```
 
+Run `alembic upgrade head` again after pulling changes, not only on a fresh database.
+`source_type` and the other enums are native Postgres types, so a schema left behind
+rejects a value the code can produce — an upload scan against a database that has not had
+the `upload` value added fails on the INSERT, which surfaces as a 500 rather than as
+anything the UI can explain.
+
 Either form lasts for that terminal session. Settings can also live in `backend/.env`
 (ignored by git), one `ECDAT_...=value` per line, which the backend reads on every start.
 
@@ -135,9 +141,9 @@ the certificates alone and a `files` scan of `demo/` still exercises every file 
 
 Open http://localhost:5173 and:
 
-1. **New scan.** Choose *Files and probe*, source type *Local folder*, path
-   `/absolute/path/to/ecdat-pipeline/demo`, probe targets `localhost:8443` and
-   `localhost:8444`, data lifetime *20+ years*. Leave Z at the policy default.
+1. **New scan.** Choose *Files and probe*, source type *Local folder*, then *Browse…*
+   and pick `ecdat-pipeline/demo`. Probe targets `localhost:8443` and `localhost:8444`,
+   data lifetime *20+ years*. Leave Z at the policy default.
 2. **File selection.** *Select all*, then *Approve and scan*. The request blocks while the
    collectors run — a few seconds for the demo tree.
 3. **Overview.** Readiness with its denominator, all four recommendation statuses, verdicts,
@@ -189,14 +195,25 @@ curl -s localhost:8000/api/scans/$ID/cbom        -o ecdat-$ID.cdx.json
 curl -s localhost:8000/api/scans/$ID/report.pdf  -o ecdat-$ID.pdf
 ```
 
-Scan modes: `files` (a folder, a git URL or a Docker image tag), `probe_only` (host:port
-targets, no files, runs immediately with no approval step) and `files_and_probe` (both —
-the only mode in which drift detection has anything to compare). Data lifetime is X in
-Mosca's inequality: how long the data this system protects must stay confidential.
+Scan modes: `files` (a folder, a browser folder upload, a git URL or a Docker image tag),
+`probe_only` (host:port targets, no files, runs immediately with no approval step) and
+`files_and_probe` (both — the only mode in which drift detection has anything to compare).
+Data lifetime is X in Mosca's inequality: how long the data this system protects must stay
+confidential.
 
-`folder` sources are read where they live and never copied. `github` sources are cloned
-with `--depth 1` under `ECDAT_WORK_ROOT/{scan_id}`; `docker_image` sources are `docker save`d
-and their layers merged in manifest order, whiteouts skipped. `.git` is pruned from the
+`folder` sources are read where they live and never copied — an API path, for a caller
+that knows an absolute path on the ECDAT host. The dashboard's *Local folder* option is
+`upload` instead: the same tree arriving over HTTP, because a browser can offer a folder
+picker but not a server-side path. The browser posts every file to `POST /api/uploads`,
+which lays them out under
+`ECDAT_WORK_ROOT/uploads/{upload_id}` and returns the id the scan then names. Those bytes
+are ours, so they are also swept — an upload nobody turned into a scan is deleted 24h later
+(`ECDAT_UPLOAD_RETENTION_HOURS`), and the per-scan file cap applies alongside a total-size
+cap (`ECDAT_MAX_UPLOAD_BYTES`, 512 MB). The client-supplied path manifest is treated as
+untrusted: an absolute path, a `..`, or anything that would resolve outside the upload
+directory is refused, and the partial tree is deleted rather than scanned. `github` sources
+are cloned with `--depth 1` under `ECDAT_WORK_ROOT/{scan_id}`; `docker_image` sources are
+`docker save`d and their layers merged in manifest order, whiteouts skipped. `.git` is pruned from the
 surface scan: packed objects are not deployed artefacts and would consume the file cap
 before a single source file reached the approval screen.
 
@@ -316,6 +333,7 @@ Interactive documentation is at http://127.0.0.1:8000/docs when the backend is r
 | Endpoint | Does |
 |---|---|
 | `POST /api/scans` | Creates the scan, stamps the policy version, stages the source and enumerates it. Ends `awaiting_approval` — `probe_only` stages nothing and runs immediately. |
+| `POST /api/uploads` | Multipart. A folder picked in the browser, for a tree that is not on the machine running ECDAT: one `files` part per file plus a `paths` field holding the JSON array of relative paths. Returns `{upload_id, file_count, total_bytes}`; the scan that follows sends `source_type: "upload"` with that id as its `source_ref`. Stored, not read — nothing is parsed until paths are approved. Abandoned uploads are swept 24h later. |
 | `GET /api/scans` | Recent scans, newest first. |
 | `GET /api/scans/{id}` | The scan row. |
 | `GET /api/scans/{id}/files` | The surface scan as a nested tree with per-directory counts and sizes. Path and size only — nothing has been read. |
@@ -377,7 +395,9 @@ All settings are environment variables prefixed `ECDAT_`, or lines in `backend/.
 | `ECDAT_SCAN_TIMEOUT_SECONDS` | `600` | Per-scan budget. |
 | `ECDAT_MAX_PROBE_TARGETS` | `20` | Probe targets per scan. |
 | `ECDAT_PROBE_TIMEOUT_SECONDS` | `10` | Network timeout per target handed to sslyze. |
-| `ECDAT_WORK_ROOT` | `/tmp/ecdat` | Where cloned repos and unpacked images land. |
+| `ECDAT_WORK_ROOT` | `/tmp/ecdat` | Where cloned repos, unpacked images and browser uploads land. |
+| `ECDAT_MAX_UPLOAD_BYTES` | `536870912` | Total bytes one browser folder upload may carry. The file cap above applies to it too. |
+| `ECDAT_UPLOAD_RETENTION_HOURS` | `24` | How long an upload nobody turned into a scan survives. Swept at startup. |
 | `ECDAT_GIT_CLONE_TIMEOUT_SECONDS` | `300` | |
 | `ECDAT_DOCKER_SAVE_TIMEOUT_SECONDS` | `600` | |
 | `ECDAT_SEMGREP_RULES_PATH` | `backend/semgrep_rules/crypto.yaml` | The only rule set Semgrep is given. |

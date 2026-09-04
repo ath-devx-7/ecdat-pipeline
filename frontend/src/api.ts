@@ -2,7 +2,7 @@
 // Everything goes through the same-origin `/api` prefix — see vite.config.ts.
 
 export type ScanMode = "probe_only" | "files" | "files_and_probe";
-export type SourceType = "folder" | "github" | "docker_image" | "none";
+export type SourceType = "folder" | "github" | "docker_image" | "upload" | "none";
 export type ScanStatus =
   | "staging"
   | "awaiting_approval"
@@ -277,6 +277,13 @@ export interface Roadmap {
   blocked_chains: BlockedChain[];
 }
 
+// POST /api/uploads. `upload_id` is the `source_ref` of the scan that follows.
+export interface UploadResponse {
+  upload_id: string;
+  file_count: number;
+  total_bytes: number;
+}
+
 export interface CbomImportResponse {
   scan_id: string;
   status: ScanStatus;
@@ -329,6 +336,20 @@ export const api = {
   scans: () => request<Scan[]>("/api/scans"),
   scan: (id: string) => request<Scan>(`/api/scans/${id}`),
   createScan: (body: ScanCreate) => request<Scan>("/api/scans", json(body)),
+  // The first half of the two-step upload flow: bytes here, then a scan naming
+  // the id this returns. `paths` carries the tree because a multipart body only
+  // carries leaf filenames — the parts and the manifest must stay in the same
+  // order. No content-type header: the browser has to set the multipart
+  // boundary itself.
+  uploadFolder: (files: File[]) => {
+    const form = new FormData();
+    form.append(
+      "paths",
+      JSON.stringify(files.map((file) => file.webkitRelativePath || file.name)),
+    );
+    for (const file of files) form.append("files", file, file.name);
+    return request<UploadResponse>("/api/uploads", { method: "POST", body: form });
+  },
   files: (id: string) => request<FileTree>(`/api/scans/${id}/files`),
   approve: (id: string, paths: string[]) =>
     request<ApproveResponse>(`/api/scans/${id}/approve`, json({ paths })),

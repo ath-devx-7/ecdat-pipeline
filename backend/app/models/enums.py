@@ -12,9 +12,18 @@ class ScanMode(str, enum.Enum):
 
 
 class SourceType(str, enum.Enum):
+    """Where a scan's files came from.
+
+    ``FOLDER`` and ``UPLOAD`` both end in a directory on this host, and differ in
+    who put it there: a folder is read in place at a path the user typed, an
+    upload is a tree the browser copied in and that we therefore own and may
+    delete. Downstream of staging the two are indistinguishable.
+    """
+
     FOLDER = "folder"
     GITHUB = "github"
     DOCKER_IMAGE = "docker_image"
+    UPLOAD = "upload"
     NONE = "none"
 
 

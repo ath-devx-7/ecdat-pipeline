@@ -7,7 +7,9 @@ later — this is the enforcement point for the §6 citation rule.
 It is also where the checks that are *not* pack validation live: the code
 rules' language coverage (§7.1) is reported here, as a warning rather than a
 failure, because a scanned extension with no rule behind it is a gap to see and
-not a reason to refuse to start.
+not a reason to refuse to start. So is the upload sweep, which is housekeeping
+rather than a check — abandoned uploads are copied bytes nobody asked us to
+keep.
 
 ``app/main.py`` (build step 2) calls :func:`initialise` on the FastAPI lifespan.
 """
@@ -22,6 +24,7 @@ from app.core.advisor import validate_targets
 from app.core.normalizer import get_alias_index
 from app.core.policy import validate_rules
 from app.core.policy_loader import PolicyPack, get_policy
+from app.intake.upload import sweep_uploads
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,13 @@ def initialise() -> tuple[Settings, PolicyPack]:
     # defect is nobody knowing which half is which, so the gap is named here,
     # once, beside the other two checks.
     uncovered = validate_rule_coverage()
+    # Not a check and never fatal: an upload is bytes we copied and therefore
+    # own, and one that nobody turned into a scan has no row pointing at it, so
+    # nothing else would ever remove it. A failure here costs disk, not results.
+    try:
+        sweep_uploads(settings)
+    except OSError as exc:
+        logger.warning("could not sweep abandoned uploads: %s", exc)
 
     logger.info(
         "policy pack %s loaded from %s (published %s, %d algorithm rules, %d PQC targets, "

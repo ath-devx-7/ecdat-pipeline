@@ -138,7 +138,7 @@ Seven tables. Findings and assets are observations; algorithms and pqc_targets a
 |---|---|---|
 | id | uuid PK | |
 | mode | enum | probe_only \| files \| files_and_probe |
-| source_type | enum | folder \| github \| docker_image \| none |
+| source_type | enum | folder \| upload \| github \| docker_image \| none — `folder` is read in place, `upload` is a tree the browser copied in and that we may delete |
 | source_ref | text | path, repo URL, or image tag |
 | probe_targets | jsonb | list of `{host, port}` |
 | data_lifetime_years | int | X in Mosca — from intake form |
@@ -631,7 +631,7 @@ An auditor must be able to reconstruct any wave from this object. If it cannot b
 
 Six screens:
 
-1. **New scan** — mode selector, source input, probe host field, data-lifetime dropdown (`<1 year` / `5–10 years` / `20+ years`), Z slider
+1. **New scan** — mode selector, source input (a folder picker for *Local folder*, a text field for a repo URL or image tag), probe host field, data-lifetime dropdown (`<1 year` / `5–10 years` / `20+ years`), Z slider
 2. **File selection** — checkbox tree with select-all, expand/collapse, per-directory toggle, count of selected. Blocks until submitted.
 3. **Overview** — PQC readiness percentage, verdict distribution, wave breakdown, recommendation status counts (recommended / blocked / no_path / unknown), policy version + staleness banner
 4. **Findings** — filterable table: verdict, wave, collector, confidence, source layer. Drill into any row for full rationale and evidence.
