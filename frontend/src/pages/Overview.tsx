@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, zStorageKey, type Overview as OverviewData } from "../api";
 import { VerdictChart, WaveChart } from "../components/Charts";
+import { ScanCoverage } from "../components/ScanCoverage";
 import {
   STATUS_BADGE,
   STATUS_DESCRIPTION,
@@ -115,12 +116,7 @@ export default function Overview() {
           </label>
         </div>
         {importing && <div className="w-full text-xs text-slate-600">{importing}</div>}
-        {scan.status === "partial" && (
-          <div className="w-full rounded-md bg-amber-50 p-2 text-xs text-amber-900">
-            This scan is <strong>partial</strong>: at least one collector failed or ran out of
-            budget. The findings below are incomplete, not wrong.
-          </div>
-        )}
+        <ScanCoverage status={scan.status} diagnostics={scan.diagnostics} />
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">

@@ -3,6 +3,13 @@
 # Loaded by app/collectors/code.py, and only from this file: the collector never
 # fetches a registry ruleset, because the scan path makes no network calls (§1).
 #
+# Languages covered: Python, Java, C, Go, JavaScript and TypeScript. The
+# collector's CODE_EXTENSIONS list is wider than that on purpose, so a rule added
+# here for a new language needs no code change — and `validate_rule_coverage`
+# logs a warning at startup naming every extension this file leaves uncovered,
+# because a file sent to Semgrep and matched against nothing is spend with no
+# coverage and no way to notice.
+#
 # THESE RULES INVENTORY; THEY DO NOT JUDGE
 #
 # A rule reports what it SAW — `hashlib.sha256`, `AES/GCM/NoPadding`, an RSA key
@@ -24,6 +31,13 @@
 #   transformation  a Java "ALG/MODE/PADDING" string; split by the collector
 #   key_size        an integer
 #   cipher          the cipher a hardcoded key was handed to (evidence only)
+#   declared        a value a call DECLARES rather than uses — an OpenSSL cipher
+#                   string handed to set_ciphers, a `ciphers:` option. Kept as
+#                   evidence beside a static `algorithm` naming the knob, the
+#                   way §7.4 records a config declaration that names no concrete
+#                   suite: the finding is about the declaration, and splitting
+#                   the string into suites is the config collector's job on a
+#                   file it can attribute
 #   literal         a matched string literal — must be the LAST field, and the
 #                   collector never stores it; it computes entropy and drops it
 #
@@ -32,7 +46,7 @@
 #   algorithm         literal spelling when the pattern fixes it
 #   algorithm_prefix  prepended to a captured `algorithm` (`algorithms.` so the
 #                     finding reads `algorithms.TripleDES`, as the source does)
-#   primitive         hash | cipher | signature | key_exchange
+#   primitive         hash | cipher | signature | key_exchange | protocol
 #   mode              ECB, CBC — when the pattern itself fixes the mode
 #   observation       tag stored in evidence_raw
 #   confidence        overrides §7.1's default of high
@@ -95,6 +109,110 @@ rules:
     pattern: ec.generate_private_key(ec.$CURVE(), ...)
     metadata:
       ecdat: { observation: ec_keygen }
+
+  - id: ecdat.python.ecdh
+    languages: [python]
+    severity: INFO
+    message: ecdat
+    pattern: ec.ECDH()
+    metadata:
+      ecdat: { algorithm: ECDH, primitive: key_exchange, observation: key_agreement }
+
+  - id: ecdat.python.dh-parameters
+    languages: [python]
+    severity: INFO
+    message: ecdat|key_size=$N
+    pattern: dh.generate_parameters(..., key_size=$N, ...)
+    metadata:
+      ecdat: { algorithm: DH, primitive: key_exchange, observation: dh_parameter_generation }
+
+  # The padding is a property of an RSA operation, not a second algorithm, so it
+  # is recorded under its own spelling and left to the alias table to fold back
+  # onto RSA. PKCS1v15 is the one asked for; OAEP and PSS are matched by the same
+  # rule because a padding scheme nobody recorded is a padding scheme nobody can
+  # compare the PKCS1v15 count against.
+  - id: ecdat.python.rsa-padding
+    languages: [python]
+    severity: INFO
+    message: ecdat|algorithm=$P
+    patterns:
+      - pattern: padding.$P(...)
+      - metavariable-regex:
+          metavariable: $P
+          regex: ^(PKCS1v15|OAEP|PSS)$
+    metadata:
+      ecdat: { algorithm_prefix: "padding.", observation: rsa_padding }
+
+  # pycryptodome. The import is required rather than assumed: `DES.new(key)` on
+  # its own is a name this rule has no reason to believe is a cipher.
+  - id: ecdat.python.pycryptodome-cipher
+    languages: [python]
+    severity: INFO
+    message: ecdat|algorithm=$ALG
+    patterns:
+      - pattern-either:
+          - pattern: Crypto.Cipher.$ALG.new(...)
+          - patterns:
+              - pattern-inside: |
+                  from Crypto.Cipher import $ALG
+                  ...
+              - pattern: $ALG.new(...)
+    metadata:
+      ecdat: { algorithm_prefix: "Crypto.Cipher.", primitive: cipher, observation: cipher_constructor }
+
+  - id: ecdat.python.pycryptodome-rsa-keygen
+    languages: [python]
+    severity: INFO
+    message: ecdat|key_size=$N
+    pattern-either:
+      - pattern: Crypto.PublicKey.RSA.generate($N, ...)
+      - patterns:
+          - pattern-inside: |
+              from Crypto.PublicKey import RSA
+              ...
+          - pattern: RSA.generate($N, ...)
+    metadata:
+      ecdat: { algorithm: RSA, observation: rsa_keygen }
+
+  - id: ecdat.python.ssl-protocol
+    languages: [python]
+    severity: INFO
+    message: ecdat|algorithm=$P
+    patterns:
+      - pattern: ssl.$P
+      - metavariable-regex:
+          metavariable: $P
+          regex: ^PROTOCOL_[A-Za-z0-9_]+$
+    metadata:
+      ecdat: { primitive: protocol, observation: protocol_declared }
+
+  - id: ecdat.python.ssl-set-ciphers
+    languages: [python]
+    severity: INFO
+    message: ecdat|declared=$C
+    pattern: $CTX.set_ciphers("$C")
+    metadata:
+      ecdat: { algorithm: set_ciphers, primitive: cipher, observation: cipher_selection_declared }
+
+  - id: ecdat.python.hmac
+    languages: [python]
+    severity: INFO
+    message: ecdat|algorithm=$D
+    pattern-either:
+      - pattern: hmac.new(..., digestmod=hashlib.$D, ...)
+      - pattern: hmac.new($K, $M, hashlib.$D)
+    metadata:
+      ecdat: { algorithm_prefix: "hashlib.", primitive: hash, observation: mac_call }
+
+  - id: ecdat.python.hmac-named
+    languages: [python]
+    severity: INFO
+    message: ecdat|algorithm=$D
+    pattern-either:
+      - pattern: hmac.new(..., digestmod="$D", ...)
+      - pattern: hmac.new($K, $M, "$D")
+    metadata:
+      ecdat: { primitive: hash, observation: mac_call }
 
   - id: ecdat.python.hardcoded-key-literal
     languages: [python]
@@ -195,6 +313,55 @@ rules:
     metadata:
       ecdat: { observation: keypair_generation }
 
+  # The rule above needs an `initialize` call to fire, so a generator whose size
+  # is left at the provider default produced nothing at all. This one covers
+  # exactly that case and no other: `pattern-not-inside` keeps a sized generator
+  # from being reported twice, once with its size and once without.
+  - id: ecdat.java.keypair-generator-unsized
+    languages: [java]
+    severity: INFO
+    message: ecdat|algorithm=$ALG
+    patterns:
+      - pattern: KeyPairGenerator.getInstance("$ALG", ...)
+      - pattern-not-inside: |
+          KeyPairGenerator $KPG = KeyPairGenerator.getInstance("$ALG", ...);
+          ...
+          $KPG.initialize(...);
+    metadata:
+      ecdat: { observation: keypair_generation }
+
+  - id: ecdat.java.ssl-context
+    languages: [java]
+    severity: INFO
+    message: ecdat|algorithm=$P
+    pattern: SSLContext.getInstance("$P", ...)
+    metadata:
+      ecdat: { primitive: protocol, observation: protocol_declared }
+
+  # An enabled-protocol list is a positive declaration, so it is enumerated one
+  # version per finding — the same rule §7.4 applies to `ssl_protocols`, and for
+  # the same reason: §9 flags diverging usage sites, and one row covering three
+  # versions cannot be diverged from in part.
+  - id: ecdat.java.enabled-protocols
+    languages: [java]
+    severity: INFO
+    message: ecdat|algorithm=$P
+    patterns:
+      - pattern-inside: $SOCKET.setEnabledProtocols(...);
+      - pattern: '"$P"'
+    metadata:
+      ecdat: { primitive: protocol, observation: protocol_version_declared }
+
+  - id: ecdat.java.enabled-cipher-suites
+    languages: [java]
+    severity: INFO
+    message: ecdat|algorithm=$S
+    patterns:
+      - pattern-inside: $SOCKET.setEnabledCipherSuites(...);
+      - pattern: '"$S"'
+    metadata:
+      ecdat: { primitive: cipher, observation: cipher_suite_declared }
+
   - id: ecdat.java.hardcoded-key-named
     languages: [java]
     severity: WARNING
@@ -253,7 +420,7 @@ rules:
       - pattern: $F(...)
       - metavariable-regex:
           metavariable: $F
-          regex: ^(DES_ecb_encrypt|DES_ncbc_encrypt|DES_cbc_encrypt|DES_ede3_cbc_encrypt|DES_ede3_ecb_encrypt|RC4|RC4_set_key|EVP_des_ecb|EVP_des_cbc|EVP_des_ede3_cbc|EVP_rc4|EVP_aes_128_ecb|EVP_aes_256_ecb|EVP_aes_128_cbc|EVP_aes_256_cbc|EVP_aes_128_gcm|EVP_aes_256_gcm|EVP_chacha20|EVP_chacha20_poly1305)$
+          regex: ^(DES_ecb_encrypt|DES_ncbc_encrypt|DES_cbc_encrypt|DES_ede3_cbc_encrypt|DES_ede3_ecb_encrypt|DES_set_key|DES_set_key_checked|DES_set_key_unchecked|RC4|RC4_set_key|EVP_des_ecb|EVP_des_cbc|EVP_des_ede3_cbc|EVP_rc4|EVP_aes_128_ecb|EVP_aes_256_ecb|EVP_aes_128_cbc|EVP_aes_256_cbc|EVP_aes_128_gcm|EVP_aes_256_gcm|EVP_chacha20|EVP_chacha20_poly1305)$
     metadata:
       ecdat: { primitive: cipher, observation: cipher_call }
 
@@ -266,3 +433,222 @@ rules:
       - pattern: RSA_generate_key($N, ...)
     metadata:
       ecdat: { algorithm: RSA, observation: rsa_keygen }
+
+  - id: ecdat.c.dh
+    languages: [c]
+    severity: INFO
+    message: ecdat
+    pattern-either:
+      - pattern: DH_new(...)
+      - pattern: DH_generate_parameters_ex(...)
+    metadata:
+      ecdat: { algorithm: DH, primitive: key_exchange, observation: dh_parameter_generation }
+
+  # The NID is the spelling OpenSSL uses for a curve; the alias table folds it
+  # onto the curve's own name, the way it already folds `prime256v1`.
+  - id: ecdat.c.ec-curve
+    languages: [c]
+    severity: INFO
+    message: ecdat|algorithm=$NID
+    pattern: EC_KEY_new_by_curve_name($NID)
+    metadata:
+      ecdat: { observation: curve_selected }
+
+  - id: ecdat.c.cipher-list
+    languages: [c]
+    severity: INFO
+    message: ecdat|declared=$C
+    pattern: SSL_CTX_set_cipher_list($CTX, "$C")
+    metadata:
+      ecdat: { algorithm: SSL_CTX_set_cipher_list, primitive: cipher, observation: cipher_selection_declared }
+
+  - id: ecdat.c.min-proto-version
+    languages: [c]
+    severity: INFO
+    message: ecdat|algorithm=$V
+    pattern: SSL_CTX_set_min_proto_version($CTX, $V)
+    metadata:
+      ecdat: { primitive: protocol, observation: protocol_floor }
+
+  # ------------------------------------------------------------------------- #
+  # Go — the standard library's crypto/* packages
+  #
+  # The spelling recorded is the import path (`crypto/md5`), not the constructor
+  # (`md5.New`), because the package is the identity the alias table can resolve
+  # and the constructor is already visible in the evidence snippet. The one
+  # exception is triple DES, which shares `crypto/des` with single DES and would
+  # otherwise be reported as the wrong algorithm.
+  # ------------------------------------------------------------------------- #
+
+  - id: ecdat.go.hash
+    languages: [go]
+    severity: INFO
+    message: ecdat|algorithm=$PKG
+    patterns:
+      - pattern-either:
+          - pattern: $PKG.New(...)
+          - pattern: $PKG.Sum(...)
+          - pattern: $PKG.Sum224(...)
+          - pattern: $PKG.Sum256(...)
+          - pattern: $PKG.Sum384(...)
+          - pattern: $PKG.Sum512(...)
+          - pattern: $PKG.New224(...)
+          - pattern: $PKG.New512_256(...)
+          - pattern: $PKG.Sum512_256(...)
+      - metavariable-regex:
+          metavariable: $PKG
+          regex: ^(md5|sha1|sha256|sha512)$
+    metadata:
+      ecdat: { algorithm_prefix: "crypto/", primitive: hash, observation: hash_call }
+
+  - id: ecdat.go.cipher
+    languages: [go]
+    severity: INFO
+    message: ecdat|algorithm=$PKG
+    patterns:
+      - pattern: $PKG.NewCipher(...)
+      - metavariable-regex:
+          metavariable: $PKG
+          regex: ^(des|rc4|aes)$
+    metadata:
+      ecdat: { algorithm_prefix: "crypto/", primitive: cipher, observation: cipher_constructor }
+
+  - id: ecdat.go.triple-des
+    languages: [go]
+    severity: INFO
+    message: ecdat
+    pattern: des.NewTripleDESCipher(...)
+    metadata:
+      ecdat:
+        algorithm: crypto/des.NewTripleDESCipher
+        primitive: cipher
+        observation: cipher_constructor
+
+  - id: ecdat.go.rsa-keygen
+    languages: [go]
+    severity: INFO
+    message: ecdat|key_size=$N
+    pattern: rsa.GenerateKey($RAND, $N)
+    metadata:
+      ecdat: { algorithm: crypto/rsa, observation: rsa_keygen }
+
+  # rsa is deliberately absent from the regex: the rule above already records it
+  # with its key size, and a second row would double-count one key.
+  - id: ecdat.go.asymmetric-keygen
+    languages: [go]
+    severity: INFO
+    message: ecdat|algorithm=$PKG
+    patterns:
+      - pattern-either:
+          - pattern: $PKG.GenerateKey(...)
+          - pattern: $PKG.GenerateParameters(...)
+      - metavariable-regex:
+          metavariable: $PKG
+          regex: ^(ecdsa|ed25519|dsa|ecdh)$
+    metadata:
+      ecdat: { algorithm_prefix: "crypto/", observation: keypair_generation }
+
+  - id: ecdat.go.curve
+    languages: [go]
+    severity: INFO
+    message: ecdat|algorithm=$CURVE
+    patterns:
+      - pattern: elliptic.$CURVE()
+      - metavariable-regex:
+          metavariable: $CURVE
+          regex: ^P(224|256|384|521)$
+    metadata:
+      ecdat: { observation: curve_selected }
+
+  - id: ecdat.go.tls-min-version
+    languages: [go]
+    severity: INFO
+    message: ecdat|algorithm=$V
+    pattern: "tls.Config{..., MinVersion: tls.$V, ...}"
+    metadata:
+      ecdat: { primitive: protocol, observation: protocol_floor }
+
+  # Scoped to the CipherSuites field rather than to `tls.TLS_*` anywhere, so a
+  # constant named in a comparison is not reported as a suite the server offers.
+  - id: ecdat.go.tls-cipher-suites
+    languages: [go]
+    severity: INFO
+    message: ecdat|algorithm=$SUITE
+    patterns:
+      - pattern-inside: "tls.Config{..., CipherSuites: $SUITES, ...}"
+      - pattern: tls.$SUITE
+      - metavariable-regex:
+          metavariable: $SUITE
+          regex: ^TLS_[A-Z0-9_]+$
+    metadata:
+      ecdat: { primitive: cipher, observation: cipher_suite_declared }
+
+  # ------------------------------------------------------------------------- #
+  # JavaScript and TypeScript — node's crypto, tls and https
+  #
+  # Every rule lists both languages: a `js` rule is not applied to a `.ts` file,
+  # and the two halves of a project are the same codebase.
+  # ------------------------------------------------------------------------- #
+
+  - id: ecdat.js.hash
+    languages: [js, ts]
+    severity: INFO
+    message: ecdat|algorithm=$ALG
+    pattern-either:
+      - pattern: crypto.createHash("$ALG", ...)
+      - pattern: crypto.createHmac("$ALG", ...)
+    metadata:
+      ecdat: { primitive: hash, observation: hash_call }
+
+  - id: ecdat.js.cipher
+    languages: [js, ts]
+    severity: INFO
+    message: ecdat|algorithm=$ALG
+    pattern-either:
+      - pattern: crypto.createCipheriv("$ALG", ...)
+      - pattern: crypto.createDecipheriv("$ALG", ...)
+    metadata:
+      ecdat: { primitive: cipher, observation: cipher_constructor }
+
+  - id: ecdat.js.keypair-generator
+    languages: [js, ts]
+    severity: INFO
+    message: ecdat|algorithm=$ALG|key_size=$N
+    pattern-either:
+      - pattern: 'crypto.generateKeyPair("$ALG", {..., modulusLength: $N, ...}, ...)'
+      - pattern: 'crypto.generateKeyPairSync("$ALG", {..., modulusLength: $N, ...}, ...)'
+    metadata:
+      ecdat: { observation: keypair_generation }
+
+  - id: ecdat.js.keypair-generator-unsized
+    languages: [js, ts]
+    severity: INFO
+    message: ecdat|algorithm=$ALG
+    patterns:
+      - pattern-either:
+          - pattern: crypto.generateKeyPair("$ALG", ...)
+          - pattern: crypto.generateKeyPairSync("$ALG", ...)
+      - pattern-not: 'crypto.generateKeyPair("$ALG", {..., modulusLength: $N, ...}, ...)'
+      - pattern-not: 'crypto.generateKeyPairSync("$ALG", {..., modulusLength: $N, ...}, ...)'
+    metadata:
+      ecdat: { observation: keypair_generation }
+
+  # `secureProtocol` and `ciphers` are node's TLS option names and appear in the
+  # options object handed to tls.connect, tls.createServer, https.request and
+  # new https.Agent. The object is matched rather than the call, because the
+  # options are as often built into a variable first as written inline.
+  - id: ecdat.js.tls-secure-protocol
+    languages: [js, ts]
+    severity: INFO
+    message: ecdat|algorithm=$P
+    pattern: '{..., secureProtocol: "$P", ...}'
+    metadata:
+      ecdat: { primitive: protocol, observation: protocol_declared }
+
+  - id: ecdat.js.tls-ciphers
+    languages: [js, ts]
+    severity: INFO
+    message: ecdat|declared=$C
+    pattern: '{..., ciphers: "$C", ...}'
+    metadata:
+      ecdat: { algorithm: ciphers, primitive: cipher, observation: cipher_selection_declared }

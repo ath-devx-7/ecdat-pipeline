@@ -265,3 +265,29 @@ def test_moving_the_z_slider_rescores_the_scan(client, scan_id) -> None:
 
     assert client.post(f"/api/scans/{scan_id}/rescore", json={"z_years": -1}).status_code == 422
     assert client.post(f"/api/scans/{uuid4()}/rescore", json={"z_years": 5}).status_code == 404
+
+
+def test_the_overview_carries_the_scans_diagnostics(client, scan_id) -> None:
+    """The dashboard's banner reads this endpoint, not the scan detail one.
+
+    ``OverviewResponse.scan`` is a ``ScanResponse``, so the per-collector rows and
+    the per-extension breakdown arrive with the counts rather than needing a
+    second request — and a screen that says "partial" has the reason in hand.
+    """
+    scan = client.get(f"/api/scans/{scan_id}/overview").json()["scan"]
+    diagnostics = scan["diagnostics"]
+
+    assert diagnostics is not None
+    assert {run["name"] for run in diagnostics["collectors"]} == {
+        "certs",
+        "config",
+        "code",
+        "binary",
+        "network",
+    }
+    # A `files` scan runs no prober; the UI must not read that silence as clean.
+    network = next(run for run in diagnostics["collectors"] if run["name"] == "network")
+    assert network["ran"] is False
+    # The demo tree is Python, Java and C, and all three have rules behind them.
+    ruled = {row["extension"]: row["ruled"] for row in diagnostics["extensions"]}
+    assert ruled[".py"] and ruled[".java"] and ruled[".c"]

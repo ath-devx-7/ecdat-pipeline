@@ -1,8 +1,12 @@
 """Config collector — SPEC.md §7.4.
 
-Four format-specific parsers over four file kinds, found by *name pattern
+Six format-specific parsers over six file kinds, found by *name pattern
 anywhere in the approved tree* rather than at a fixed path, because a config
-file's location is a packaging accident and its name is not.
+file's location is a packaging accident and its name is not. §7.4's table names
+four — ``openssl.cnf``, ``nginx.conf``, ``sshd_config``, ``java.security`` — and
+two more are here for the same reason the table has the first four: Apache httpd
+and the OpenSSH *client* declare the same crypto in the same shape, and a scan
+that reads a server's floor but not the client's is reporting half a handshake.
 
 Everything here is tagged ``source_layer: config``, and that tag carries the
 entire weight of §9. A config file is a **claim** about what a service will
@@ -58,7 +62,7 @@ OBS_PRIVATE_KEY_PATH = "tls-private-key-path"
 
 
 class ConfigCollector(Collector):
-    """§7.4. Four parsers, one collector, ``source_layer: config`` throughout."""
+    """§7.4. Six parsers, one collector, ``source_layer: config`` throughout."""
 
     name: ClassVar[CollectorName] = CollectorName.CONFIG
 
@@ -106,6 +110,26 @@ def _is_java_security(name: str) -> bool:
     return name == "java.security" or name.endswith(".java.security")
 
 
+def _is_apache_ssl_conf(name: str) -> bool:
+    """Apache's TLS config, wherever the distribution put it.
+
+    ``ssl.conf`` on Red Hat, ``ssl.conf``/``default-ssl.conf`` under
+    ``sites-available`` on Debian, and sometimes just ``httpd.conf``. The
+    ``openssl`` exclusion is belt and braces — ``_is_openssl_cnf`` is tested
+    first, and ``openssl.conf`` also ends in ``ssl.conf``.
+    """
+    if "openssl" in name:
+        return False
+    return name.endswith(".conf") and (
+        name.endswith("ssl.conf") or name.startswith("httpd") or name.startswith("apache")
+    )
+
+
+def _is_ssh_config(name: str) -> bool:
+    """The OpenSSH *client* config. ``sshd_config`` does not end in ``ssh_config``."""
+    return name == "ssh_config" or name.endswith(".ssh_config")
+
+
 def _parser_for(relative: str) -> Callable[[str, Path], list[RawFinding]] | None:
     """Pick a parser from the file's basename. Order matters only in that it is fixed."""
     name = relative.rsplit("/", 1)[-1].lower()
@@ -113,7 +137,9 @@ def _parser_for(relative: str) -> Callable[[str, Path], list[RawFinding]] | None
         (_is_openssl_cnf, parse_openssl_cnf),
         (_is_nginx_conf, parse_nginx_conf),
         (_is_sshd_config, parse_sshd_config),
+        (_is_ssh_config, parse_ssh_config),
         (_is_java_security, parse_java_security),
+        (_is_apache_ssl_conf, parse_apache_ssl_conf),
     ):
         if matches(name):
             return parse
@@ -537,6 +563,27 @@ def parse_sshd_config(relative: str, absolute: Path) -> list[RawFinding]:
     before trusting the location: the declaration is real, its scope is narrower
     than the file suggests.
     """
+    return _parse_ssh_like(relative, absolute, role="server")
+
+
+def parse_ssh_config(relative: str, absolute: Path) -> list[RawFinding]:
+    """The same four keys on the client side — ``ssh_config`` rather than ``sshd_config``.
+
+    Identical syntax and identical keys, so it is the identical parser; what
+    differs is what the declaration is *about*, and that is recorded as ``role``
+    rather than folded into the observation name. A client's ``Ciphers`` line
+    says what this host will *offer* when it connects out; a server's says what
+    it will accept. Both are claims about a handshake, both belong in the
+    inventory, and nothing here decides which matters more.
+
+    ``Host`` blocks scope later directives to matching destinations, exactly as
+    ``Match`` does on the server side, and are untracked for the same reason: the
+    declaration is real, its scope is narrower than the file suggests.
+    """
+    return _parse_ssh_like(relative, absolute, role="client")
+
+
+def _parse_ssh_like(relative: str, absolute: Path, role: str) -> list[RawFinding]:
     findings: list[RawFinding] = []
     for number, raw in enumerate(_read_text(absolute).splitlines(), start=1):
         line = raw.split("#", 1)[0].strip()
@@ -565,6 +612,7 @@ def parse_sshd_config(relative: str, absolute: Path) -> list[RawFinding]:
                     evidence_location=_location(relative, number),
                     evidence_raw={
                         "file": relative,
+                        "role": role,
                         "key": key,
                         "declared": value,
                         "modifier": modifier,
@@ -585,6 +633,7 @@ def parse_sshd_config(relative: str, absolute: Path) -> list[RawFinding]:
                 evidence_location=_location(relative, number),
                 evidence_raw={
                     "file": relative,
+                    "role": role,
                     "key": key,
                     "declared": value,
                     "modifier": modifier,
@@ -594,6 +643,176 @@ def parse_sshd_config(relative: str, absolute: Path) -> list[RawFinding]:
             for token in tokens
         )
     return findings
+
+
+# --------------------------------------------------------------------------- #
+# Apache httpd — ssl.conf
+# --------------------------------------------------------------------------- #
+
+#: ``SSLProtocol`` and ``SSLProxyProtocol`` take a list where each entry may be
+#: prefixed ``+`` (add) or ``-`` (remove), and where ``all`` is a selector rather
+#: than a version. The prefix is the whole difference between a positive
+#: declaration and a negative one, which is why it is parsed rather than stripped.
+_APACHE_PROTOCOL_KEYS = {"sslprotocol", "sslproxyprotocol"}
+_APACHE_CIPHER_KEYS = {"sslciphersuite", "sslproxyciphersuite"}
+_APACHE_PATH_KEYS = {
+    "sslcertificatefile": (OBS_CERTIFICATE_PATH, "certificate_path_declared"),
+    "sslcertificatechainfile": (OBS_CERTIFICATE_PATH, "certificate_path_declared"),
+    "sslcertificatekeyfile": (OBS_PRIVATE_KEY_PATH, "key_path_declared"),
+}
+
+
+def parse_apache_ssl_conf(relative: str, absolute: Path) -> list[RawFinding]:
+    """``SSLProtocol``, ``SSLCipherSuite``, ``SSLCertificateFile``, ``SSLCertificateKeyFile``.
+
+    §7.4's rules, unchanged, applied to httpd's directive syntax:
+
+    * A positive protocol entry (``TLSv1.2``, ``+TLSv1.3``) is one finding each,
+      because §9 flags diverging usage sites and a row covering three versions
+      cannot be diverged from in part.
+    * A negative entry (``-all``, ``-SSLv3``) is a declaration of what the server
+      will *refuse*, so the whole line becomes **one** finding about the
+      declaration with the entries kept as evidence — the same treatment
+      ``jdk.tls.disabledAlgorithms`` gets, and for the same reason.
+    * ``all`` on its own is a selector, not a version, and stays in evidence.
+    * The certificate and key paths are recorded as declared and never followed;
+      they point into the deployed filesystem, not into the approved tree.
+
+    ``<VirtualHost>`` blocks are not tracked, so a directive inside one is
+    reported without that scope. §9's scope guard needs the comparison to be like
+    with like, and this parser deliberately claims no vhost identity rather than
+    guessing one from a ``ServerName`` that may be inherited.
+    """
+    findings: list[RawFinding] = []
+    for key, value, number in _apache_directives(_read_text(absolute)):
+        lowered = key.lower()
+        location = _location(relative, number)
+        context = {"file": relative, "key": key, "declared": value}
+
+        if lowered in _APACHE_PROTOCOL_KEYS:
+            findings.extend(_apache_protocol_findings(location, context, value))
+        elif lowered in _APACHE_CIPHER_KEYS:
+            # httpd 2.4.36+ writes `SSLCipherSuite TLSv1.3 TLS_AES_256_...`, where
+            # the leading token scopes the list to a protocol. It is not
+            # suite-shaped, so `_split_cipher_list` keeps it as a control token —
+            # visible in evidence, never counted as a suite.
+            findings.extend(_cipher_list_findings(relative, number, key, value, context))
+        elif lowered in _APACHE_PATH_KEYS:
+            marker, observation = _APACHE_PATH_KEYS[lowered]
+            declared = _first_argument(value)
+            findings.append(
+                RawFinding(
+                    collector=CollectorName.CONFIG,
+                    algorithm_name=marker,
+                    source_layer=SourceLayer.CONFIG,
+                    confidence=Confidence.HIGH,
+                    evidence_location=location,
+                    evidence_raw={
+                        **context,
+                        "observation": observation,
+                        "declared_path": declared,
+                    },
+                )
+            )
+    return findings
+
+
+def _apache_protocol_findings(
+    location: str, context: dict[str, Any], value: str
+) -> list[RawFinding]:
+    positive: list[str] = []
+    negative: list[str] = []
+    selectors: list[str] = []
+
+    for token in value.split():
+        if token.startswith("-"):
+            negative.append(token)
+            continue
+        bare = token[1:] if token.startswith("+") else token
+        (selectors if bare.lower() == "all" else positive).append(bare)
+
+    findings = [
+        RawFinding(
+            collector=CollectorName.CONFIG,
+            # As observed. Folding "TLSv1.2" onto one identity is §8's job.
+            algorithm_name=version,
+            source_layer=SourceLayer.CONFIG,
+            confidence=Confidence.HIGH,
+            primitive=Primitive.PROTOCOL,
+            protocol_version=version,
+            evidence_location=location,
+            evidence_raw={
+                **context,
+                "observation": "protocol_version_declared",
+                "control_tokens": selectors,
+            },
+        )
+        for version in positive
+    ]
+
+    if negative:
+        findings.append(
+            RawFinding(
+                collector=CollectorName.CONFIG,
+                algorithm_name=context["key"],
+                source_layer=SourceLayer.CONFIG,
+                confidence=Confidence.HIGH,
+                evidence_location=location,
+                evidence_raw={
+                    **context,
+                    "observation": "protocol_versions_removed",
+                    "entries": negative,
+                    "control_tokens": selectors,
+                },
+            )
+        )
+    return findings
+
+
+def _first_argument(value: str) -> str | None:
+    """The first argument of a directive, with httpd's quoting honoured.
+
+    ``SSLCertificateFile "/etc/pki/my certs/demo.crt"`` is one path, not two
+    tokens, and splitting it on whitespace would record half of it.
+    """
+    value = value.strip()
+    if not value:
+        return None
+    if value[0] in "\"'":
+        closing = value.find(value[0], 1)
+        return value[1:closing] if closing > 0 else value[1:]
+    return value.split()[0]
+
+
+def _apache_directives(text: str) -> Iterator[tuple[str, str, int]]:
+    """``(directive, value, line)`` for every non-container line.
+
+    ``<VirtualHost>``/``</VirtualHost>`` and the other section tags are skipped
+    rather than parsed: nothing here needs the tree, and a half-tracked tree is
+    worse than none (see the parser's docstring on scope). Line continuations end
+    in a backslash, as in every other file this module reads.
+    """
+    pending: list[str] = []
+    start = 0
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
+        if pending:
+            pending.append(line)
+        elif not line or line.startswith("<"):
+            continue
+        else:
+            pending, start = [line], number
+
+        if pending[-1].endswith("\\"):
+            pending[-1] = pending[-1][:-1].strip()
+            continue
+
+        joined = " ".join(part for part in pending if part)
+        pending = []
+        directive, _, value = joined.partition(" ")
+        value = value.strip()
+        if directive and value:
+            yield directive.strip(), value, start
 
 
 # --------------------------------------------------------------------------- #

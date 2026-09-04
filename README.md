@@ -271,8 +271,8 @@ prober reaches only hosts the scan declared; the importer reads only what was up
 | Collector | Reads | `source_layer` |
 |---|---|---|
 | `certs` | `.pem .crt .cer .der` by extension, plus any file containing a `BEGIN CERTIFICATE` block | `artifact` |
-| `config` | `openssl.cnf`, `nginx.conf`, `sshd_config`, `java.security`, matched by name anywhere in the tree | `config` |
-| `code` | Source files, through Semgrep with the local rule file `backend/semgrep_rules/crypto.yaml` — no registry, no metrics | `source` |
+| `config` | `openssl.cnf`, `nginx.conf`, `sshd_config`, `ssh_config`, `java.security`, Apache `ssl.conf`, matched by name anywhere in the tree | `config` |
+| `code` | Source files, through Semgrep with the local rule file `backend/semgrep_rules/crypto.yaml` — no registry, no metrics. Rules ship for Python, Java, C, Go and JavaScript/TypeScript | `source` |
 | `binary` | ELF files: `DT_NEEDED`, `.dynsym` and `.rodata` via pyelftools; nothing is executed | `artifact` |
 | `network` | The `{host, port}` pairs in `scan.probe_targets`, and nothing else | `live` |
 | `cbom_import` | An uploaded CycloneDX 1.6 document, kept byte for byte in `provenance_blobs` | `source` |
@@ -291,6 +291,14 @@ Three properties are enforced in one place rather than trusted to each collector
   `partial` naming the collector that died — or, when Semgrep runs out of memory on one
   file, keeps everything it found and still reports `partial` — rather than failing whole
   or reporting `complete` over a hole.
+- **A `partial` scan says what degraded.** Every run records, per collector, whether it
+  ran at all, how many approved files it was handed, how many findings came back and the
+  reason it stopped, plus approved files against findings *per extension*. It is stored on
+  the `scans` row (`diagnostics`) and served by `GET /api/scans/{id}`, so "300 `.go` files,
+  0 findings, no Go rules" is readable off the dashboard rather than inferred. The
+  extension list Semgrep is started for is deliberately wider than the rule file, and
+  startup logs a warning naming every extension no rule stands behind — a gap to see, not
+  a reason to refuse to start.
 
 The prober adds a fourth, and it is a security control: **it refuses any host not in
 `scan.probe_targets`**, checked at the point of connection rather than while iterating the

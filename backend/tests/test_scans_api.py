@@ -12,8 +12,10 @@ from uuid import UUID
 
 import sqlalchemy as sa
 
+from app.collectors.base import Collector, CollectorTimeout, RawFinding, ScanContext
 from app.core.policy_loader import get_policy
-from app.models.scan import ScanFile
+from app.models.enums import CollectorName
+from app.models.scan import Scan, ScanFile
 
 
 def _create_folder_scan(client, folder, **overrides) -> dict:
@@ -230,3 +232,108 @@ def _files(node) -> list[str]:
     if node["type"] == "file":
         return [node["path"]]
     return [path for child in node["children"] for path in _files(child)]
+
+
+# --------------------------------------------------------------------------- #
+# A partial scan has to say what degraded — and keep saying it (§2)
+#
+# The reason is produced inside a collector, carried by the runner, stored on the
+# ``scans`` row, and served by the detail endpoint. Every one of those steps can
+# drop it silently, so the assertion is made at the far end.
+# --------------------------------------------------------------------------- #
+
+
+class TimingOutCollector(Collector):
+    """A collector that spends its budget and says so, as §2 asks it to."""
+
+    name = CollectorName.CODE
+    message = "exceeded the 120s per-collector budget while running semgrep"
+
+    def collect(self, ctx: ScanContext) -> list[RawFinding]:
+        raise CollectorTimeout(self.message)
+
+
+def test_a_timed_out_collectors_reason_reaches_the_scan_detail_endpoint(
+    client, db_session, source_folder, approve_all_files, monkeypatch
+) -> None:
+    monkeypatch.setattr("app.runner.FILE_COLLECTORS", (TimingOutCollector(),))
+    scan = _create_folder_scan(client, source_folder(4))
+
+    approved = approve_all_files(scan["id"])
+    assert approved["status"] == "partial"
+
+    detail = client.get(f"/api/scans/{scan['id']}")
+    assert detail.status_code == 200, detail.text
+    collectors = detail.json()["diagnostics"]["collectors"]
+    code = next(run for run in collectors if run["name"] == "code")
+
+    assert code["ran"] is True
+    assert code["reason"] == TimingOutCollector.message
+    assert code["error"].startswith("CollectorTimeout: ")
+    assert code["file_count"] == approved["approved_count"]
+    # It survived the round trip through the row, not just the response object.
+    db_session.expire_all()
+    stored = db_session.get(Scan, UUID(scan["id"])).diagnostics
+    assert stored["collectors"][0]["reason"] == TimingOutCollector.message
+
+
+def test_the_approve_response_and_the_detail_endpoint_agree(
+    client, source_folder, approve_all_files, monkeypatch
+) -> None:
+    monkeypatch.setattr("app.runner.FILE_COLLECTORS", (TimingOutCollector(),))
+    scan = _create_folder_scan(client, source_folder(4))
+
+    approved = approve_all_files(scan["id"])
+    detail = client.get(f"/api/scans/{scan['id']}").json()
+
+    assert approved["diagnostics"] == detail["diagnostics"]
+
+
+def test_a_collector_the_mode_never_ran_is_reported_as_such(
+    client, source_folder, approve_all_files
+) -> None:
+    """A ``files`` scan runs no prober, and the UI must not read that as "clean"."""
+    scan = _create_folder_scan(client, source_folder(4))
+    approve_all_files(scan["id"])
+
+    collectors = client.get(f"/api/scans/{scan['id']}").json()["diagnostics"]["collectors"]
+    network = next(run for run in collectors if run["name"] == "network")
+
+    assert network["ran"] is False
+    assert network["finding_count"] == 0
+
+
+def test_the_detail_endpoint_carries_the_per_extension_breakdown(
+    client, tmp_path, approve_all_files
+) -> None:
+    """"300 .go files, 0 findings, no Go rules" has to be readable off the API."""
+    folder = tmp_path / "src"
+    folder.mkdir()
+    (folder / "app.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (folder / "app.go").write_text("package main\n", encoding="utf-8")
+    (folder / "notes.txt").write_text("nothing\n", encoding="utf-8")
+
+    scan = _create_folder_scan(client, folder)
+    approve_all_files(scan["id"])
+
+    extensions = {
+        row["extension"]: row
+        for row in client.get(f"/api/scans/{scan['id']}").json()["diagnostics"]["extensions"]
+    }
+
+    assert extensions[".rs"] == {
+        "extension": ".rs",
+        "approved_files": 1,
+        "finding_count": 0,
+        "code_scanned": True,
+        "ruled": False,
+    }
+    assert extensions[".go"]["ruled"] is True
+    assert extensions[".txt"]["code_scanned"] is False
+
+
+def test_a_scan_that_has_not_run_has_no_diagnostics(client, source_folder) -> None:
+    """Null, not empty. An empty object would read as "every collector was fine"."""
+    scan = _create_folder_scan(client, source_folder(4))
+
+    assert client.get(f"/api/scans/{scan['id']}").json()["diagnostics"] is None

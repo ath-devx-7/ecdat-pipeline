@@ -1,6 +1,13 @@
-"""Startup wiring — the policy pack must load before anything serves a request."""
+"""Startup wiring — the policy pack must load before anything serves a request.
+
+The code rules' language coverage is checked here too, and the distinction
+between the two kinds of check is the point of the last test: a pack defect
+stops the process, an uncovered extension does not.
+"""
 
 from __future__ import annotations
+
+import logging
 
 import pytest
 
@@ -50,3 +57,22 @@ def test_database_module_imports_without_a_live_database() -> None:
     assert engine is not None
     assert SessionLocal is not None
     assert "findings" in Base.metadata.tables
+
+
+def test_startup_names_the_scanned_extensions_no_rule_covers(caplog) -> None:
+    """A gap in coverage is reported and survivable — unlike a gap in the pack.
+
+    ``CODE_EXTENSIONS`` is wider than the rule file on purpose (§7.1), so this
+    cannot be a failure. What it must not be is silent: a ``.rs`` file is sent to
+    semgrep, parsed, and matched against nothing, and nobody would know.
+    """
+    with caplog.at_level(logging.WARNING, logger="app.collectors.code"):
+        initialise()
+
+    warning = next(
+        record.getMessage()
+        for record in caplog.records
+        if "no rule behind them" in record.getMessage()
+    )
+    assert ".rs" in warning
+    assert ".go" not in warning  # Go rules ship, so it is not part of the gap

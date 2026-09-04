@@ -33,6 +33,12 @@ class Scan(Base):
     )
     file_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     approved_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    #: Why the result looks the way it does (§2's partial reporting): per
+    #: collector whether it ran, what it was handed and what it returned, plus
+    #: approved files against findings per extension. Written by the runner at
+    #: the end of a run, so a dashboard opened days later can still say which
+    #: collector degraded rather than only that one did.
+    diagnostics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = created_at_col()
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
 

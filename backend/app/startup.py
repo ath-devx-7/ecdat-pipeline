@@ -4,6 +4,11 @@ Loads the policy pack once, before anything can serve a request. A pack that
 fails validation must stop the process here rather than produce uncited verdicts
 later — this is the enforcement point for the §6 citation rule.
 
+It is also where the checks that are *not* pack validation live: the code
+rules' language coverage (§7.1) is reported here, as a warning rather than a
+failure, because a scanned extension with no rule behind it is a gap to see and
+not a reason to refuse to start.
+
 ``app/main.py`` (build step 2) calls :func:`initialise` on the FastAPI lifespan.
 """
 
@@ -11,6 +16,7 @@ from __future__ import annotations
 
 import logging
 
+from app.collectors.code import CODE_EXTENSIONS, validate_rule_coverage
 from app.config import Settings, get_settings
 from app.core.advisor import validate_targets
 from app.core.normalizer import get_alias_index
@@ -35,6 +41,11 @@ def initialise() -> tuple[Settings, PolicyPack]:
     # cannot test would not block, it would be skipped — and a prerequisite
     # skipped is a recommendation rounded in the optimistic direction (§11).
     validate_targets(policy)
+    # Not a pack defect and not fatal: the scanned-extension list is wider than
+    # the rule file by design (see app/collectors/code.py). What would be a
+    # defect is nobody knowing which half is which, so the gap is named here,
+    # once, beside the other two checks.
+    uncovered = validate_rule_coverage()
 
     logger.info(
         "policy pack %s loaded from %s (published %s, %d algorithm rules, %d PQC targets, "
@@ -48,6 +59,12 @@ def initialise() -> tuple[Settings, PolicyPack]:
         len(aliases.entries),
         len(aliases.by_name),
     )
+    if uncovered:
+        logger.info(
+            "code rules cover %d of %d scanned extension(s); see the warning above for the rest",
+            len(CODE_EXTENSIONS) - len(uncovered),
+            len(CODE_EXTENSIONS),
+        )
     if policy.version.is_stale():
         logger.warning(
             "policy pack %s is %d days old (warning threshold %d). An air-gapped "

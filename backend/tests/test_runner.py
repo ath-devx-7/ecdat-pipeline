@@ -8,6 +8,11 @@ rather than in any collector:
 
 The second is why the run survives at all. The first is why a scan is something
 a user can consent to.
+
+A third follows from the second: ``partial`` has to say *what* degraded. The
+diagnostics tests below hold the runner to that — which collector stopped and
+why, which one was never called at all, and how many approved files of each
+extension produced how many findings.
 """
 
 from __future__ import annotations
@@ -20,7 +25,13 @@ import pytest
 
 from app.collectors.base import Collector, CollectorTimeout, RawFinding, ScanContext
 from app.models.enums import CollectorName, ScanMode, ScanStatus, SourceLayer
-from app.runner import FILE_COLLECTORS, collectors_for, run_collectors
+from app.runner import (
+    FILE_COLLECTORS,
+    PROBE_COLLECTORS,
+    collectors_for,
+    extension_coverage,
+    run_collectors,
+)
 
 
 class ExplodingCollector(Collector):
@@ -201,3 +212,113 @@ def test_the_context_carries_the_probe_target_allowlist() -> None:
     ctx = ScanContext.build(scan_id=uuid4(), work_dir=Path("."), probe_targets=targets)
 
     assert ctx.probe_targets == targets
+
+
+# --------------------------------------------------------------------------- #
+# Diagnostics — why the result looks the way it does (§2)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_failed_collector_reports_its_reason_without_the_exception_class(
+    scan_context,
+) -> None:
+    """`error` is for a log; `reason` is what a person reads off a banner."""
+    ctx = scan_context({"app.py": "x = 1\n"})
+
+    result = run_collectors(ctx, (ExplodingCollector(), QuietCollector()))
+    runs = {run.name: run for run in result.diagnostics.collectors}
+
+    assert runs[CollectorName.CODE].reason == "semgrep died holding the door open"
+    assert runs[CollectorName.CODE].error.startswith("RuntimeError: ")
+    assert runs[CollectorName.BINARY].reason is None
+
+
+def test_a_timed_out_collector_keeps_its_budget_message(scan_context) -> None:
+    class SlowCollector(Collector):
+        name = CollectorName.NETWORK
+
+        def collect(self, ctx: ScanContext) -> list[RawFinding]:
+            raise CollectorTimeout("exceeded the 120s per-collector budget while probing")
+
+    result = run_collectors(scan_context({}), (SlowCollector(),))
+    run = next(r for r in result.diagnostics.collectors if r.name is CollectorName.NETWORK)
+
+    assert run.ran is True
+    assert run.reason == "exceeded the 120s per-collector budget while probing"
+
+
+def test_a_collector_the_mode_never_called_is_listed_as_not_run(scan_context) -> None:
+    """"Found nothing" and "was not run" are different claims about the tree."""
+    ctx = scan_context({"app.py": "x = 1\n"})
+
+    result = run_collectors(ctx, (QuietCollector(),))
+    runs = {run.name: run for run in result.diagnostics.collectors}
+
+    assert set(runs) == {collector.name for collector in FILE_COLLECTORS + PROBE_COLLECTORS}
+    assert runs[CollectorName.BINARY].ran is True
+    for name in (CollectorName.CERTS, CollectorName.CONFIG, CollectorName.NETWORK):
+        assert runs[name].ran is False
+        assert runs[name].finding_count == 0
+        assert runs[name].reason is None
+
+
+def test_a_collector_records_how_many_files_it_was_handed(scan_context) -> None:
+    ctx = scan_context({"a.py": "x = 1\n", "b.go": "package main\n", "c.txt": "x\n"})
+
+    result = run_collectors(ctx, (QuietCollector(),))
+    runs = {run.name: run for run in result.diagnostics.collectors}
+
+    assert runs[CollectorName.BINARY].file_count == 3
+    # A prober reads no files; claiming it was handed three would be a number
+    # that says nothing about what it did.
+    assert runs[CollectorName.NETWORK].file_count == 0
+
+
+def test_the_extension_breakdown_pairs_approved_files_against_findings() -> None:
+    """The pair is the point: 3 .go files and 0 findings, with no Go rules, is readable."""
+    approved = ["a.py", "b.py", "x.go", "y.go", "z.go", "notes.txt"]
+    findings = [
+        RawFinding(
+            collector=CollectorName.CODE,
+            algorithm_name="hashlib.md5",
+            source_layer=SourceLayer.SOURCE,
+            evidence_location="a.py:3",
+        ),
+        RawFinding(
+            collector=CollectorName.NETWORK,
+            algorithm_name="TLSv1",
+            source_layer=SourceLayer.LIVE,
+            # A probe finding is host:port and belongs to no extension.
+            evidence_location="localhost:8443",
+        ),
+    ]
+
+    rows = {row.extension: row for row in extension_coverage(approved, findings)}
+
+    assert (rows[".go"].approved_files, rows[".go"].finding_count) == (3, 0)
+    assert (rows[".py"].approved_files, rows[".py"].finding_count) == (2, 1)
+    assert rows[".txt"].approved_files == 1
+    # Ordered by approved files descending — the biggest silence sorts first.
+    assert [row.extension for row in extension_coverage(approved, findings)][0] == ".go"
+
+
+def test_the_extension_breakdown_says_which_extensions_have_rules_behind_them() -> None:
+    rows = {row.extension: row for row in extension_coverage(["a.go", "b.rs", "c.txt"], [])}
+
+    assert (rows[".go"].code_scanned, rows[".go"].ruled) == (True, True)
+    # Sent to semgrep, matched against nothing — the gap this makes visible.
+    assert (rows[".rs"].code_scanned, rows[".rs"].ruled) == (True, False)
+    assert (rows[".txt"].code_scanned, rows[".txt"].ruled) == (False, False)
+
+
+def test_a_probe_finding_is_not_filed_under_a_port_shaped_extension() -> None:
+    findings = [
+        RawFinding(
+            collector=CollectorName.NETWORK,
+            algorithm_name="TLSv1",
+            source_layer=SourceLayer.LIVE,
+            evidence_location="demo.test:8443",
+        )
+    ]
+
+    assert extension_coverage([], findings) == ()

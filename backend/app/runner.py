@@ -16,6 +16,16 @@ find, and the scan is ``partial`` with the findings kept rather than discarded.
 **One collector's timeout is its own.** Each gets a fresh budget (§2), enforced
 cooperatively inside the collector's own loop — see ``ScanContext.check_budget``.
 
+**A partial scan says which collector degraded, and over how much.** ``partial``
+on its own is not an actionable statement: an empty result and a broken one look
+identical from the outside. So every run records, per collector, whether it ran
+at all, how many files it was handed, how many findings came back, and the
+``CollectorPartial`` or ``CollectorTimeout`` reason if there was one — plus a
+breakdown of approved files against findings *per extension*, which is what turns
+"300 .go files, 0 findings" into "300 .go files, 0 findings, no Go rules". It is
+stored on the ``scans`` row so the dashboard can read it back long after the
+synchronous response that produced it has gone.
+
 The loop below is deliberately dull: ``for collector in collectors`` with the
 results appended. SPEC.md §2 names Celery workers as the production path, and
 swapping this loop for a queue must not require touching a single collector.
@@ -33,8 +43,11 @@ says what to migrate it to — or what stands in the way.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace as dataclass_replace
+from collections import Counter
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace as dataclass_replace
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from time import monotonic
 
 from sqlalchemy.orm import Session
@@ -42,7 +55,7 @@ from sqlalchemy.orm import Session
 from app.collectors.base import Collector, CollectorPartial, RawFinding, ScanContext
 from app.collectors.binary import BinaryCollector
 from app.collectors.certs import CertificateCollector
-from app.collectors.code import CodeCollector
+from app.collectors.code import CODE_EXTENSIONS, CodeCollector, ruled_extensions
 from app.collectors.config import ConfigCollector
 from app.collectors.network import NetworkCollector
 from app.config import Settings, get_settings
@@ -62,11 +75,14 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "Analysis",
     "CollectorRun",
+    "ExtensionCoverage",
     "FILE_COLLECTORS",
     "RunResult",
+    "ScanDiagnostics",
     "analyse",
     "build_context",
     "collectors_for",
+    "extension_coverage",
     "run_collectors",
     "run_scan",
 ]
@@ -91,16 +107,82 @@ PROBE_COLLECTORS: tuple[Collector, ...] = (NetworkCollector(),)
 
 @dataclass(frozen=True, slots=True)
 class CollectorRun:
-    """What one collector did. Reported to the user, so a failure is visible."""
+    """What one collector did. Reported to the user, so a failure is visible.
+
+    ``ran`` is false for a collector this scan's mode never called — a
+    ``probe_only`` scan reads no files, and "the certificate collector found
+    nothing" and "the certificate collector was not run" are different sentences.
+    ``reason`` is the collector's own words for the gap, without the exception
+    class ``error`` carries, because that is what a person reads.
+    """
 
     name: CollectorName
-    finding_count: int
-    duration_seconds: float
+    finding_count: int = 0
+    duration_seconds: float = 0.0
     error: str | None = None
+    #: whether this scan's mode called the collector at all
+    ran: bool = True
+    #: approved files handed to it. Zero for a prober, which reads none.
+    file_count: int = 0
+    #: the CollectorPartial / CollectorTimeout message, unqualified
+    reason: str | None = None
 
     @property
     def failed(self) -> bool:
         return self.error is not None
+
+
+@dataclass(frozen=True, slots=True)
+class ExtensionCoverage:
+    """Approved files of one extension against findings produced from them.
+
+    The number that matters is the pair. 300 approved ``.go`` files and 0
+    findings is either a codebase with no crypto in it or a scanner with no Go
+    rules, and only ``ruled`` separates the two.
+    """
+
+    extension: str
+    approved_files: int
+    finding_count: int
+    #: in ``CODE_EXTENSIONS`` — sent to Semgrep at all
+    code_scanned: bool = False
+    #: some rule in the rule file declares a language covering it
+    ruled: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ScanDiagnostics:
+    """Why a scan's result looks the way it does. Reported whatever the status."""
+
+    collectors: tuple[CollectorRun, ...] = ()
+    extensions: tuple[ExtensionCoverage, ...] = ()
+
+    def as_dict(self) -> dict:
+        """The JSON shape stored on the ``scans`` row and served by the API."""
+        return {
+            "collectors": [
+                {
+                    "name": run.name.value,
+                    "ran": run.ran,
+                    "finding_count": run.finding_count,
+                    "file_count": run.file_count,
+                    "duration_seconds": run.duration_seconds,
+                    "error": run.error,
+                    "reason": run.reason,
+                }
+                for run in self.collectors
+            ],
+            "extensions": [
+                {
+                    "extension": entry.extension,
+                    "approved_files": entry.approved_files,
+                    "finding_count": entry.finding_count,
+                    "code_scanned": entry.code_scanned,
+                    "ruled": entry.ruled,
+                }
+                for entry in self.extensions
+            ],
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +203,9 @@ class RunResult:
     #: ``recommendations`` rows (§11). One per finding that needs migrating —
     #: or more than one, when the pack's tie-breaks cannot separate two targets.
     recommendations: tuple[Recommendation, ...] = ()
+    #: Why the result looks the way it does — which collector degraded, and
+    #: which extensions were scanned against nothing. Stored on the scan row.
+    diagnostics: ScanDiagnostics = field(default_factory=ScanDiagnostics)
 
     @property
     def recommendation_counts(self) -> dict[str, int]:
@@ -182,16 +267,18 @@ def run_collectors(ctx: ScanContext, collectors: tuple[Collector, ...]) -> RunRe
     """Run each collector under its own budget, surviving whatever any of them does."""
     findings: list[RawFinding] = []
     runs: list[CollectorRun] = []
+    file_collectors = {collector.name for collector in FILE_COLLECTORS}
 
     for collector in collectors:
         started = monotonic()
+        reason: str | None = None
         try:
             produced = collector.collect(ctx.restarted())
             error = None
         except CollectorPartial as exc:
             # It got most of the way. Keep what it found, and report the gap
             # exactly as a failure is reported — the scan is partial either way.
-            produced, error = list(exc.findings), f"{type(exc).__name__}: {exc}"
+            produced, error, reason = list(exc.findings), f"{type(exc).__name__}: {exc}", str(exc)
             logger.warning(
                 "scan %s: collector %s finished partially: %s",
                 ctx.scan_id,
@@ -202,7 +289,7 @@ def run_collectors(ctx: ScanContext, collectors: tuple[Collector, ...]) -> RunRe
             # Deliberately broad. A collector is third-party-ish code over
             # attacker-influenced input; any exception it can raise must cost
             # its own findings and nothing else.
-            produced, error = [], f"{type(exc).__name__}: {exc}"
+            produced, error, reason = [], f"{type(exc).__name__}: {exc}", str(exc)
             logger.exception(
                 "scan %s: collector %s failed; continuing with a partial result",
                 ctx.scan_id,
@@ -216,18 +303,80 @@ def run_collectors(ctx: ScanContext, collectors: tuple[Collector, ...]) -> RunRe
                 finding_count=len(produced),
                 duration_seconds=round(monotonic() - started, 3),
                 error=error,
+                ran=True,
+                # A prober reads no files, and saying it was handed the approved
+                # tree would be a number that means nothing about what it did.
+                file_count=len(ctx.approved_paths) if collector.name in file_collectors else 0,
+                reason=reason,
             )
         )
         logger.info(
-            "scan %s: collector %s produced %d finding(s) in %.2fs%s",
+            "scan %s: collector %s produced %d finding(s) from %d file(s) in %.2fs%s",
             ctx.scan_id,
             collector.name.value,
             len(produced),
+            runs[-1].file_count,
             runs[-1].duration_seconds,
             "" if error is None else f" before failing: {error}",
         )
 
-    return RunResult(findings=tuple(findings), runs=tuple(runs))
+    return RunResult(
+        findings=tuple(findings),
+        runs=tuple(runs),
+        diagnostics=ScanDiagnostics(
+            collectors=tuple(runs) + _collectors_not_run(runs),
+            extensions=extension_coverage(ctx.approved_paths, findings),
+        ),
+    )
+
+
+def _collectors_not_run(runs: Sequence[CollectorRun]) -> tuple[CollectorRun, ...]:
+    """The registered collectors this mode never called, so their silence is legible.
+
+    A ``probe_only`` scan produces no certificate findings because it opens no
+    files, not because the tree is clean. Listing them with ``ran: False`` is the
+    difference between those two readings.
+    """
+    ran = {run.name for run in runs}
+    return tuple(
+        CollectorRun(name=collector.name, ran=False)
+        for collector in FILE_COLLECTORS + PROBE_COLLECTORS
+        if collector.name not in ran
+    )
+
+
+def extension_coverage(
+    approved: Sequence[str], findings: Sequence[RawFinding]
+) -> tuple[ExtensionCoverage, ...]:
+    """Approved files against findings produced, one row per extension.
+
+    Findings are attributed by the path in ``evidence_location``, which is
+    ``path:line`` for everything that read a file and ``host:port`` for the
+    prober — so a probe finding lands under no extension and is left out rather
+    than filed under ``.443``. Ordered by approved files descending: the
+    extension with the most files and the fewest findings is the one worth
+    looking at, and it should not need scrolling to.
+    """
+    ruled = ruled_extensions()
+    files = Counter(PurePosixPath(path).suffix.lower() for path in approved)
+    produced: Counter[str] = Counter()
+    for finding in findings:
+        location = finding.evidence_location or ""
+        path = location.rsplit(":", 1)[0] if ":" in location else location
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix in files:
+            produced[suffix] += 1
+
+    return tuple(
+        ExtensionCoverage(
+            extension=extension or "(none)",
+            approved_files=count,
+            finding_count=produced.get(extension, 0),
+            code_scanned=extension in CODE_EXTENSIONS,
+            ruled=extension in ruled,
+        )
+        for extension, count in sorted(files.items(), key=lambda item: (-item[1], item[0]))
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +440,9 @@ def run_scan(session: Session, scan: Scan, settings: Settings | None = None) -> 
         recommendations=analysis.recommendations,
     )
 
+    # Stored whatever the status. A `complete` scan that found nothing in 300
+    # .go files has the same question to answer as a partial one.
+    scan.diagnostics = result.diagnostics.as_dict()
     scan.status = result.status
     scan.completed_at = datetime.now(timezone.utc)
     session.flush()

@@ -332,6 +332,15 @@ def test_the_demo_java_security_reports_one_finding_per_disabled_list(
         ("etc/ssh/sshd_config", "parse_sshd_config"),
         ("image/etc/ssh/sshd_config", "parse_sshd_config"),
         ("jdk/conf/security/java.security", "parse_java_security"),
+        ("etc/httpd/conf.d/ssl.conf", "parse_apache_ssl_conf"),
+        ("etc/apache2/sites-available/default-ssl.conf", "parse_apache_ssl_conf"),
+        ("image/etc/httpd/conf/httpd.conf", "parse_apache_ssl_conf"),
+        ("etc/ssh/ssh_config", "parse_ssh_config"),
+        ("home/deploy/.ssh/ssh_config", "parse_ssh_config"),
+        # `openssl.conf` also ends in "ssl.conf"; the openssl parser wins, and
+        # `sshd_config` does not end in "ssh_config".
+        ("etc/ssl/openssl.conf", "parse_openssl_cnf"),
+        ("etc/ssh/sshd_config", "parse_sshd_config"),
         # Not configs this collector understands.
         ("certs/embedded-cert.conf", None),
         ("app/settings.conf", None),
@@ -370,3 +379,186 @@ def test_one_unparseable_file_does_not_lose_the_others(scan_context, demo_file) 
     findings = collect(ctx)
 
     assert any(finding.evidence_raw["file"] == "good/openssl.cnf" for finding in findings)
+
+
+# --------------------------------------------------------------------------- #
+# Apache httpd — ssl.conf
+# --------------------------------------------------------------------------- #
+
+APACHE_SSL = """# httpd TLS
+Listen 443 https
+<VirtualHost _default_:443>
+    ServerName demo.test
+    SSLEngine on
+    SSLProtocol all -SSLv3 -TLSv1 +TLSv1.2 TLSv1.3
+    SSLCipherSuite HIGH:!aNULL:DES-CBC3-SHA:ECDHE-RSA-AES128-GCM-SHA256
+    SSLCertificateFile /etc/pki/tls/certs/demo.crt
+    SSLCertificateKeyFile /etc/pki/tls/private/demo.key
+    # A commented-out directive is not a declaration.
+    # SSLProtocol TLSv1.1
+    ServerAdmin root@demo.test
+</VirtualHost>
+"""
+
+
+def test_apache_enumerates_the_protocols_it_offers(scan_context) -> None:
+    """One finding per positive version — §9 flags diverging sites one at a time."""
+    ctx = scan_context({"etc/httpd/conf.d/ssl.conf": APACHE_SSL})
+
+    findings = collect(ctx)
+    offered = [
+        finding
+        for finding in findings
+        if finding.evidence_raw["observation"] == "protocol_version_declared"
+    ]
+
+    assert {finding.algorithm_name for finding in offered} == {"TLSv1.2", "TLSv1.3"}
+    assert all(finding.primitive is Primitive.PROTOCOL for finding in offered)
+    assert all(finding.protocol_version == finding.algorithm_name for finding in offered)
+    assert all(finding.source_layer is SourceLayer.CONFIG for finding in offered)
+    assert all(finding.confidence is Confidence.HIGH for finding in offered)
+    assert line_at(ctx, offered[0].evidence_location).strip().startswith("SSLProtocol ")
+    # `all` is a selector, not a version, and a commented line is not a
+    # declaration.
+    assert not by_name(findings, "all")
+    assert not by_name(findings, "TLSv1.1")
+
+
+def test_an_apache_removal_list_is_one_finding_about_the_declaration(scan_context) -> None:
+    """``-SSLv3 -TLSv1`` says what the server refuses. Enumerating it would invert it."""
+    ctx = scan_context({"ssl.conf": APACHE_SSL})
+
+    findings = collect(ctx)
+    removed = [
+        finding
+        for finding in findings
+        if finding.evidence_raw["observation"] == "protocol_versions_removed"
+    ]
+
+    assert len(removed) == 1
+    assert removed[0].algorithm_name == "SSLProtocol"
+    assert removed[0].evidence_raw["entries"] == ["-SSLv3", "-TLSv1"]
+    assert removed[0].evidence_raw["control_tokens"] == ["all"]
+    # A row named SSLv3 here would say this host offers SSLv3.
+    assert not by_name(findings, "SSLv3")
+    assert not by_name(findings, "TLSv1")
+
+
+def test_apache_cipher_suites_and_paths_follow_the_existing_rules(scan_context) -> None:
+    ctx = scan_context({"ssl.conf": APACHE_SSL})
+
+    findings = collect(ctx)
+    suites = [
+        finding
+        for finding in findings
+        if finding.evidence_raw["observation"] == "cipher_suite_declared"
+    ]
+
+    assert {finding.algorithm_name for finding in suites} == {
+        "DES-CBC3-SHA",
+        "ECDHE-RSA-AES128-GCM-SHA256",
+    }
+    # Selector keywords stay evidence rather than becoming findings.
+    assert set(suites[0].evidence_raw["control_tokens"]) == {"HIGH", "!aNULL"}
+
+    certificate = by_name(findings, "tls-certificate-path")
+    key = by_name(findings, "tls-private-key-path")
+    assert certificate[0].evidence_raw["declared_path"] == "/etc/pki/tls/certs/demo.crt"
+    assert key[0].evidence_raw["declared_path"] == "/etc/pki/tls/private/demo.key"
+
+
+def test_a_quoted_apache_path_is_recorded_whole(scan_context) -> None:
+    """httpd quotes a path with spaces in it; splitting on whitespace loses half."""
+    ctx = scan_context(
+        {"ssl.conf": 'SSLCertificateFile "/etc/pki/my certs/demo.crt"\n'}
+    )
+
+    findings = collect(ctx)
+
+    assert findings[0].evidence_raw["declared_path"] == "/etc/pki/my certs/demo.crt"
+
+
+def test_an_apache_file_with_no_tls_directives_produces_nothing(scan_context) -> None:
+    """The near miss: a conf the dispatcher picks up but that declares no crypto."""
+    ctx = scan_context(
+        {
+            "httpd.conf": (
+                "ServerRoot /etc/httpd\n"
+                "Listen 80\n"
+                "DocumentRoot /var/www/html\n"
+                "<Directory /var/www/html>\n"
+                "    Require all granted\n"
+                "</Directory>\n"
+            )
+        }
+    )
+
+    assert collect(ctx) == []
+
+
+def test_a_tls13_scoped_cipher_list_keeps_its_scope_as_evidence(scan_context) -> None:
+    """httpd 2.4.36+ writes `SSLCipherSuite TLSv1.3 …`; the scope is not a suite."""
+    ctx = scan_context({"ssl.conf": "SSLCipherSuite TLSv1.3 TLS_AES_256_GCM_SHA384\n"})
+
+    findings = collect(ctx)
+
+    assert [finding.algorithm_name for finding in findings] == ["TLS_AES_256_GCM_SHA384"]
+    assert "TLSv1.3" in findings[0].evidence_raw["control_tokens"]
+
+
+# --------------------------------------------------------------------------- #
+# ssh_config — the client side of the same four keys
+# --------------------------------------------------------------------------- #
+
+SSH_CLIENT = """# OpenSSH client
+Host *
+    KexAlgorithms diffie-hellman-group14-sha1,curve25519-sha256
+    Ciphers aes128-ctr,3des-cbc
+    MACs hmac-md5,hmac-sha2-256
+    HostKeyAlgorithms ssh-rsa,ssh-ed25519
+"""
+
+
+def test_the_ssh_client_config_declares_the_same_four_keys(scan_context) -> None:
+    ctx = scan_context({"etc/ssh/ssh_config": SSH_CLIENT})
+
+    findings = collect(ctx)
+    primitives = {finding.algorithm_name: finding.primitive for finding in findings}
+
+    assert primitives["diffie-hellman-group14-sha1"] is Primitive.KEY_EXCHANGE
+    assert primitives["3des-cbc"] is Primitive.CIPHER
+    assert primitives["hmac-md5"] is Primitive.HASH
+    assert primitives["ssh-rsa"] is Primitive.SIGNATURE
+    assert all(finding.source_layer is SourceLayer.CONFIG for finding in findings)
+    assert all(finding.confidence is Confidence.HIGH for finding in findings)
+
+    kex = by_name(findings, "diffie-hellman-group14-sha1")[0]
+    assert line_at(ctx, kex.evidence_location).strip().startswith("KexAlgorithms ")
+
+
+def test_a_client_declaration_records_that_it_is_a_client(scan_context) -> None:
+    """Same syntax, same keys, different claim: what this host will *offer*."""
+    client = scan_context({"ssh_config": SSH_CLIENT})
+    server = scan_context({"sshd_config": SSH_CLIENT}, approved=["sshd_config"])
+
+    assert {finding.evidence_raw["role"] for finding in collect(client)} == {"client"}
+    assert {finding.evidence_raw["role"] for finding in collect(server)} == {"server"}
+
+
+def test_a_client_removal_list_is_one_finding_like_the_server_side(scan_context) -> None:
+    ctx = scan_context({"ssh_config": "Ciphers -3des-cbc\n"})
+
+    findings = collect(ctx)
+
+    assert len(findings) == 1
+    assert findings[0].evidence_raw["observation"] == "ssh_algorithms_removed"
+    assert findings[0].evidence_raw["role"] == "client"
+    assert not by_name(findings, "3des-cbc")
+
+
+def test_a_client_config_with_no_crypto_directives_produces_nothing(scan_context) -> None:
+    ctx = scan_context(
+        {"ssh_config": "Host build\n    HostName build.internal\n    User deploy\n    Port 2222\n"}
+    )
+
+    assert collect(ctx) == []

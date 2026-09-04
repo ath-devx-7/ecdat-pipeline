@@ -33,6 +33,18 @@ in its JSON as an error for that file while the rest of the run completes. The
 collector keeps every finding it got and raises :class:`CollectorPartial` so
 the scan is ``partial`` and the gap is named. Losing twenty parsed files over the
 twenty-first would be the worse outcome.
+
+**The gap between what is scanned and what is ruled on is checked at startup.**
+``CODE_EXTENSIONS`` is deliberately wider than the rule file, so a rule added for
+a new language needs no code change. The cost is that a ``.rs`` file is sent to
+Semgrep, parsed, and matched against nothing — spend with no coverage, and
+invisible unless something says so. :func:`validate_rule_coverage` reads the
+``languages:`` keys out of the rule file and logs, once per process, every
+extension in ``CODE_EXTENSIONS`` no rule stands behind. It warns rather than
+raises: the wider list is the design, and an uncovered extension is a gap to see,
+not a reason to refuse to start. The same coverage map feeds the per-extension
+breakdown the runner records (§2's partial reporting), which is what turns "300
+.go files, 0 findings" into "…and no Go rules".
 """
 
 from __future__ import annotations
@@ -51,6 +63,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+import yaml
+
 from app.collectors.base import (
     Collector,
     CollectorPartial,
@@ -65,6 +79,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "CODE_EXTENSIONS",
+    "LANGUAGE_EXTENSIONS",
     "CodeCollector",
     "MESSAGE_PREFIX",
     "REDACTED",
@@ -73,20 +88,57 @@ __all__ = [
     "findings_from_document",
     "is_code_file",
     "parse_message",
+    "rule_languages",
+    "ruled_extensions",
     "run_semgrep",
     "semgrep_command",
     "shannon_entropy",
+    "validate_rule_coverage",
 ]
 
-#: What is worth starting Semgrep for. The rule file covers Python, Java and C;
-#: the rest are languages Semgrep parses, kept so a rule added later is applied
-#: without touching this list.
+#: What is worth starting Semgrep for. Wider than the rule file on purpose — the
+#: rest are languages Semgrep parses, kept so a rule added later is applied
+#: without touching this list. :func:`validate_rule_coverage` says at startup
+#: which of them nothing rules on yet.
 CODE_EXTENSIONS = frozenset(
     {
         ".py", ".java", ".c", ".h", ".cc", ".cpp", ".hpp", ".js", ".jsx", ".ts", ".tsx",
         ".go", ".rb", ".php", ".kt", ".kts", ".scala", ".cs", ".rs", ".swift",
     }
 )
+
+#: Semgrep ``languages:`` key → the extensions in :data:`CODE_EXTENSIONS` it
+#: covers. Both spellings of every key Semgrep accepts are listed, because a
+#: rule written ``languages: [javascript]`` covers the same files as one written
+#: ``languages: [js]`` and a coverage check that disagreed would report a gap
+#: that is not there. ``.h`` belongs to both C and C++ for the same reason
+#: Semgrep is ambiguous about it: the extension does not say which.
+LANGUAGE_EXTENSIONS: Mapping[str, frozenset[str]] = {
+    "python": frozenset({".py"}),
+    "py": frozenset({".py"}),
+    "java": frozenset({".java"}),
+    "c": frozenset({".c", ".h"}),
+    "cpp": frozenset({".cc", ".cpp", ".hpp", ".h"}),
+    "c++": frozenset({".cc", ".cpp", ".hpp", ".h"}),
+    "go": frozenset({".go"}),
+    "golang": frozenset({".go"}),
+    "js": frozenset({".js", ".jsx"}),
+    "javascript": frozenset({".js", ".jsx"}),
+    "ts": frozenset({".ts", ".tsx"}),
+    "typescript": frozenset({".ts", ".tsx"}),
+    "rb": frozenset({".rb"}),
+    "ruby": frozenset({".rb"}),
+    "php": frozenset({".php"}),
+    "kt": frozenset({".kt", ".kts"}),
+    "kotlin": frozenset({".kt", ".kts"}),
+    "scala": frozenset({".scala"}),
+    "cs": frozenset({".cs"}),
+    "csharp": frozenset({".cs"}),
+    "c#": frozenset({".cs"}),
+    "rs": frozenset({".rs"}),
+    "rust": frozenset({".rs"}),
+    "swift": frozenset({".swift"}),
+}
 
 #: Command lines have a length limit — 32 KB on Windows — and 5000 approved
 #: files (§2's cap) would exceed it. Targets go to Semgrep in batches.
@@ -117,6 +169,84 @@ class SemgrepRun:
 #: ``(relative_paths, work_dir, settings, timeout_seconds) -> SemgrepRun``. The
 #: collector takes one so a test can stand in for the subprocess.
 SemgrepRunner = Callable[[Sequence[str], Path, Settings, float], SemgrepRun]
+
+
+# --------------------------------------------------------------------------- #
+# Rule coverage — what is scanned against what is ruled on
+# --------------------------------------------------------------------------- #
+
+
+def rule_languages(rules_path: Path | str) -> set[str]:
+    """Every ``languages:`` key in the rule file, lowercased.
+
+    Reads the YAML rather than asking Semgrep, because this runs at startup and
+    §1 keeps the scan path — Semgrep included — off the critical path of coming
+    up. A rule file that will not parse is not this function's failure to
+    report: Semgrep says so, in the collector, with its own error.
+    """
+    try:
+        document = yaml.safe_load(Path(rules_path).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("code: rule coverage could not be checked: %s", exc)
+        return set()
+    if not isinstance(document, Mapping):
+        return set()
+
+    languages: set[str] = set()
+    for rule in document.get("rules") or ():
+        if not isinstance(rule, Mapping):
+            continue
+        declared = rule.get("languages") or rule.get("paths") or ()
+        if isinstance(declared, str):
+            declared = [declared]
+        languages.update(str(language).strip().lower() for language in declared)
+    return languages
+
+
+def ruled_extensions(rules_path: Path | str | None = None) -> frozenset[str]:
+    """The extensions in :data:`CODE_EXTENSIONS` some rule actually matches."""
+    path = rules_path if rules_path is not None else get_settings().semgrep_rules_path
+    covered: set[str] = set()
+    for language in rule_languages(path):
+        covered.update(LANGUAGE_EXTENSIONS.get(language, ()))
+    return frozenset(covered & CODE_EXTENSIONS)
+
+
+def validate_rule_coverage(rules_path: Path | str | None = None) -> tuple[str, ...]:
+    """Name every scanned extension no rule stands behind. Warns; never raises.
+
+    The list being wider than the rules is the design — see the module docstring
+    — so this is a visibility control, not a gate. What it buys is that the gap
+    is stated once at startup with the extensions spelled out, instead of being
+    inferred later from a scan that found nothing in 300 files.
+    """
+    path = Path(rules_path) if rules_path is not None else get_settings().semgrep_rules_path
+    languages = rule_languages(path)
+    unknown = sorted(language for language in languages if language not in LANGUAGE_EXTENSIONS)
+    covered = ruled_extensions(path)
+    uncovered = tuple(sorted(CODE_EXTENSIONS - covered))
+
+    if uncovered:
+        logger.warning(
+            "code: %d of %d scanned extension(s) have no rule behind them: %s. Files with "
+            "these extensions are sent to semgrep, parsed, and matched against nothing. "
+            "Rules live in %s; adding a `languages:` key closes the gap with no code change.",
+            len(uncovered),
+            len(CODE_EXTENSIONS),
+            ", ".join(uncovered),
+            path,
+        )
+    else:
+        logger.info("code: every scanned extension has a rule behind it")
+    if unknown:
+        # A language key this map does not know covers nothing as far as the
+        # check is concerned, so its rules would look like a gap that is not one.
+        logger.warning(
+            "code: rule file declares language(s) this build does not map to an extension: %s. "
+            "Their rules still run; they just do not count towards coverage.",
+            ", ".join(unknown),
+        )
+    return uncovered
 
 
 # --------------------------------------------------------------------------- #

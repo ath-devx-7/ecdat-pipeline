@@ -22,10 +22,12 @@ __all__ = [
     "CbomImportResponse",
     "CollectorRunSummary",
     "DirectoryNode",
+    "ExtensionCoverageView",
     "FileNode",
     "FileTreeResponse",
     "ProbeTarget",
     "ScanCreate",
+    "ScanDiagnosticsView",
     "ScanResponse",
     "build_tree",
 ]
@@ -102,6 +104,60 @@ class ScanCreate(BaseModel):
         return self
 
 
+class CollectorRunSummary(BaseModel):
+    """One collector's contribution to a run.
+
+    Reported per collector rather than as a single total so a ``partial`` scan
+    says *which* collector fell over. "Some findings are missing" is not an
+    actionable statement; "the config collector died after 0.4s" is.
+
+    ``ran`` is false for a collector this scan's mode never called: a
+    ``probe_only`` scan opens no files, and "the certificate collector found
+    nothing" and "the certificate collector was not run" are different claims
+    about the tree. ``reason`` is the collector's own words for the gap —
+    ``error`` is the same thing with the exception class in front of it.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: CollectorName
+    finding_count: int = 0
+    duration_seconds: float = 0.0
+    error: str | None = None
+    ran: bool = True
+    #: approved files handed to it; zero for a prober, which reads none
+    file_count: int = 0
+    reason: str | None = None
+
+
+class ExtensionCoverageView(BaseModel):
+    """Approved files of one extension against findings produced from them.
+
+    The pair is the point. 300 approved ``.go`` files and 0 findings is either a
+    codebase with no crypto in it or a scanner with no Go rules, and ``ruled``
+    is the field that separates them.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    extension: str
+    approved_files: int
+    finding_count: int
+    #: sent to Semgrep at all
+    code_scanned: bool = False
+    #: some rule declares a language covering it
+    ruled: bool = False
+
+
+class ScanDiagnosticsView(BaseModel):
+    """Why a scan's result looks the way it does (§2's partial reporting)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    collectors: list[CollectorRunSummary] = Field(default_factory=list)
+    extensions: list[ExtensionCoverageView] = Field(default_factory=list)
+
+
 class ScanResponse(BaseModel):
     """The ``scans`` row as the API presents it."""
 
@@ -119,6 +175,10 @@ class ScanResponse(BaseModel):
     approved_count: int
     created_at: datetime | None
     completed_at: datetime | None
+    #: Present once the collectors have run. ``None`` before that, and for a
+    #: scan stored before this field existed — which is not the same as an empty
+    #: one, so the UI must not render "nothing degraded" from a missing value.
+    diagnostics: ScanDiagnosticsView | None = None
 
 
 class FileNode(BaseModel):
@@ -160,22 +220,6 @@ class ApproveRequest(BaseModel):
     paths: list[str] = Field(default_factory=list)
 
 
-class CollectorRunSummary(BaseModel):
-    """One collector's contribution to a run.
-
-    Reported per collector rather than as a single total so a ``partial`` scan
-    says *which* collector fell over. "Some findings are missing" is not an
-    actionable statement; "the config collector died after 0.4s" is.
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    name: CollectorName
-    finding_count: int
-    duration_seconds: float
-    error: str | None = None
-
-
 class ApproveResponse(BaseModel):
     scan_id: UUID
     status: ScanStatus
@@ -186,6 +230,10 @@ class ApproveResponse(BaseModel):
     #: dropping anything (§8).
     finding_count: int = 0
     collectors: list[CollectorRunSummary] = Field(default_factory=list)
+    #: The same collector rows plus the per-extension breakdown, in the shape
+    #: ``GET /api/scans/{id}`` serves them — so a caller that only ever sees the
+    #: approve response reads the gap the same way the dashboard does.
+    diagnostics: ScanDiagnosticsView | None = None
     #: Verdicts by outcome (§10). ``broken_now`` and ``quantum_vulnerable`` are
     #: separate keys and stay separate: they are independent classifications, and
     #: a caller that adds them together has already lost the distinction.

@@ -46,6 +46,7 @@ export interface Scan {
   approved_count: number;
   created_at: string | null;
   completed_at: string | null;
+  diagnostics: ScanDiagnostics | null;
 }
 
 export interface FileNode {
@@ -81,6 +82,31 @@ export interface CollectorRun {
   finding_count: number;
   duration_seconds: number;
   error: string | null;
+  // false when this scan's mode never called the collector. "found nothing" and
+  // "was not run" are different claims and the UI must not merge them.
+  ran: boolean;
+  file_count: number;
+  // the collector's own words for the gap; `error` is the same with the
+  // exception class in front
+  reason: string | null;
+}
+
+export interface ExtensionCoverage {
+  extension: string;
+  approved_files: number;
+  finding_count: number;
+  // sent to Semgrep at all
+  code_scanned: boolean;
+  // some rule declares a language covering it
+  ruled: boolean;
+}
+
+// Why a scan's result looks the way it does. Null before the collectors have
+// run, and for a scan stored before the field existed — which is not the same
+// as an empty one, so nothing may render "all clear" from a missing value.
+export interface ScanDiagnostics {
+  collectors: CollectorRun[];
+  extensions: ExtensionCoverage[];
 }
 
 export interface ApproveResponse {
@@ -90,6 +116,7 @@ export interface ApproveResponse {
   file_count: number;
   finding_count: number;
   collectors: CollectorRun[];
+  diagnostics: ScanDiagnostics | null;
   verdict_counts: Record<string, number>;
   alignment: { status: string; reason?: string; note_count?: number };
   wave_counts: Record<string, number>;

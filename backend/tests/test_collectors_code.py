@@ -10,20 +10,26 @@ with Semgrep's answer, not Semgrep itself.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import yaml
 
 from app.collectors.base import CollectorPartial, CollectorTimeout, RawFinding, ScanContext
 from app.collectors.code import (
+    CODE_EXTENSIONS,
     REDACTED,
     CodeCollector,
     SemgrepRun,
     is_code_file,
     parse_message,
+    rule_languages,
+    ruled_extensions,
     semgrep_command,
     shannon_entropy,
+    validate_rule_coverage,
 )
 from app.config import get_settings
 from app.models.enums import CollectorName, Confidence, Primitive, ScanStatus, SourceLayer
@@ -442,3 +448,539 @@ def test_an_ecb_use_is_recorded_once_with_its_mode(scan_context) -> None:
     findings = [f for f in CodeCollector().collect(ctx) if f.algorithm_name == "algorithms.AES"]
 
     assert [(f.mode, f.evidence_raw["observation"]) for f in findings] == [("ECB", "ecb_mode")]
+
+
+# --------------------------------------------------------------------------- #
+# Language coverage — what is scanned against what is ruled on
+#
+# The gap is deliberate (CODE_EXTENSIONS is wider than the rule file) and the
+# check is a warning rather than a failure. What these assert is that the gap is
+# *named*: a language whose rules are dropped must not go quiet.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_shipped_rules_cover_the_five_languages_they_claim_to() -> None:
+    assert rule_languages(get_settings().semgrep_rules_path) >= {
+        "python",
+        "java",
+        "c",
+        "go",
+        "js",
+        "ts",
+    }
+    assert ruled_extensions() >= {".py", ".java", ".c", ".h", ".go", ".js", ".jsx", ".ts", ".tsx"}
+
+
+def test_an_extension_with_no_rule_behind_it_is_named_in_a_warning(caplog) -> None:
+    """§7.1: the wider list is the design, so this warns and never raises."""
+    with caplog.at_level(logging.WARNING, logger="app.collectors.code"):
+        uncovered = validate_rule_coverage()
+
+    assert set(uncovered) <= CODE_EXTENSIONS
+    assert ".rs" in uncovered and ".rb" in uncovered  # nothing rules on these yet
+    assert ".go" not in uncovered and ".ts" not in uncovered
+    message = "\n".join(record.getMessage() for record in caplog.records)
+    for extension in uncovered:
+        assert extension in message
+
+
+def test_dropping_a_language_from_the_rules_widens_the_reported_gap(tmp_path: Path) -> None:
+    """The check reads the rule file, so removing Go's rules re-opens .go visibly."""
+    document = yaml.safe_load(get_settings().semgrep_rules_path.read_text(encoding="utf-8"))
+    document["rules"] = [rule for rule in document["rules"] if "go" not in rule["languages"]]
+    trimmed = tmp_path / "trimmed.yaml"
+    trimmed.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+
+    assert ".go" not in ruled_extensions(trimmed)
+    assert ".go" in validate_rule_coverage(trimmed)
+
+
+def test_a_language_key_the_map_does_not_know_is_reported_rather_than_ignored(
+    tmp_path: Path, caplog
+) -> None:
+    """It covers nothing as far as the check can tell, which is worth saying once."""
+    path = tmp_path / "rules.yaml"
+    path.write_text(
+        yaml.safe_dump({"rules": [{"id": "x", "languages": ["ocaml"], "pattern": "x"}]}),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.collectors.code"):
+        validate_rule_coverage(path)
+
+    assert "ocaml" in "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_an_unreadable_rule_file_does_not_stop_the_check(tmp_path: Path) -> None:
+    assert rule_languages(tmp_path / "missing.yaml") == set()
+
+
+# --------------------------------------------------------------------------- #
+# Go
+#
+# Each block is a fixture that must match beside a near-miss that must not. The
+# near-misses are the point: a rule that fires on `tls.VersionTLS12` in a version
+# comparison reports a floor the server never declared.
+# --------------------------------------------------------------------------- #
+
+GO_WEAK = """
+package main
+
+import (
+\t"crypto/des"
+\t"crypto/dsa"
+\t"crypto/ecdsa"
+\t"crypto/ed25519"
+\t"crypto/elliptic"
+\t"crypto/md5"
+\t"crypto/rand"
+\t"crypto/rc4"
+\t"crypto/rsa"
+\t"crypto/sha1"
+\t"crypto/tls"
+)
+
+func weak(data []byte, key []byte) {
+\th := md5.New()
+\ts := sha1.Sum(data)
+\tb, _ := des.NewCipher(key)
+\tt, _ := des.NewTripleDESCipher(key)
+\tr, _ := rc4.NewCipher(key)
+\trk, _ := rsa.GenerateKey(rand.Reader, 1024)
+\tek, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+\tpub, priv, _ := ed25519.GenerateKey(rand.Reader)
+\tvar params dsa.Parameters
+\tdsa.GenerateParameters(&params, rand.Reader, dsa.L1024N160)
+\tcfg := &tls.Config{
+\t\tMinVersion: tls.VersionTLS10,
+\t\tCipherSuites: []uint16{
+\t\t\ttls.TLS_RSA_WITH_AES_128_CBC_SHA,
+\t\t},
+\t}
+\t_ = h; _ = s; _ = b; _ = t; _ = r; _ = rk; _ = ek; _ = pub; _ = priv; _ = cfg
+}
+"""
+
+GO_NEAR_MISS = """
+package main
+
+import (
+\t"crypto/tls"
+\t"fmt"
+)
+
+type md5 struct{ n int }
+
+func (m md5) New() int { return m.n }
+
+func nearMiss(state *tls.ConnectionState) {
+\tlocal := md5{n: 1}
+\t_ = local.New()
+\tif state.Version < tls.VersionTLS12 {
+\t\tfmt.Println("old", tls.TLS_RSA_WITH_AES_128_CBC_SHA)
+\t}
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def go_findings(tmp_path_factory) -> dict[str, list[RawFinding]]:
+    root = tmp_path_factory.mktemp("go")
+    (root / "weak.go").write_text(GO_WEAK, encoding="utf-8", newline="\n")
+    (root / "near.go").write_text(GO_NEAR_MISS, encoding="utf-8", newline="\n")
+    ctx = ScanContext.build(
+        scan_id=uuid4(), work_dir=root, approved_paths=["weak.go", "near.go"]
+    )
+    found = CodeCollector().collect(ctx)
+    return {
+        "weak": [f for f in found if f.evidence_location.startswith("weak.go")],
+        "near": [f for f in found if f.evidence_location.startswith("near.go")],
+    }
+
+
+def test_the_go_standard_library_is_inventoried_by_import_path(go_findings) -> None:
+    """The package is the identity; the constructor is already in the evidence."""
+    names = {f.algorithm_name for f in go_findings["weak"]}
+
+    assert {
+        "crypto/md5",
+        "crypto/sha1",
+        "crypto/des",
+        "crypto/des.NewTripleDESCipher",
+        "crypto/rc4",
+        "crypto/rsa",
+        "crypto/ecdsa",
+        "crypto/ed25519",
+        "crypto/dsa",
+    } <= names
+
+
+def test_go_records_primitives_key_sizes_and_curves(go_findings) -> None:
+    by_algorithm = {f.algorithm_name: f for f in go_findings["weak"]}
+
+    assert by_algorithm["crypto/md5"].primitive is Primitive.HASH
+    assert by_algorithm["crypto/des"].primitive is Primitive.CIPHER
+    # Triple DES shares crypto/des with single DES, so it is recorded apart —
+    # reporting it as DES would name the wrong algorithm.
+    assert by_algorithm["crypto/des.NewTripleDESCipher"].primitive is Primitive.CIPHER
+    assert by_algorithm["crypto/rsa"].key_size == 1024
+    assert by_algorithm["P256"].evidence_raw["observation"] == "curve_selected"
+    # RSA is generated by its own rule; the generic one must not double-count it.
+    assert len([f for f in go_findings["weak"] if f.algorithm_name == "crypto/rsa"]) == 1
+
+
+def test_a_go_tls_config_declares_its_floor_and_its_suites(go_findings) -> None:
+    floor = [f for f in go_findings["weak"] if f.algorithm_name == "VersionTLS10"]
+    assert len(floor) == 1
+    assert floor[0].primitive is Primitive.PROTOCOL
+    assert floor[0].evidence_raw["observation"] == "protocol_floor"
+
+    suites = [f for f in go_findings["weak"] if f.algorithm_name.startswith("TLS_")]
+    assert [f.algorithm_name for f in suites] == ["TLS_RSA_WITH_AES_128_CBC_SHA"]
+    assert suites[0].primitive is Primitive.CIPHER
+
+
+def test_go_near_misses_are_not_reported(go_findings) -> None:
+    """A local type called md5, a version *comparison*, a suite named in a log line."""
+    assert go_findings["near"] == []
+
+
+# --------------------------------------------------------------------------- #
+# JavaScript and TypeScript
+# --------------------------------------------------------------------------- #
+
+JS_WEAK = """
+const crypto = require("crypto");
+const https = require("https");
+
+function weak(key, iv) {
+  const h = crypto.createHash("md5");
+  const c = crypto.createCipheriv("des-ede3-cbc", key, iv);
+  crypto.generateKeyPair("rsa", { modulusLength: 1024 }, () => {});
+  const kp = crypto.generateKeyPairSync("ed25519");
+  const agent = new https.Agent({
+    secureProtocol: "TLSv1_method",
+    ciphers: "DEFAULT@SECLEVEL=1",
+  });
+  return [h, c, kp, agent];
+}
+module.exports = { weak };
+"""
+
+TS_WEAK = """
+import * as crypto from "crypto";
+
+export function weak(key: Buffer, iv: Buffer): void {
+  const h: crypto.Hash = crypto.createHash("sha1");
+  const c = crypto.createCipheriv("rc4", key, iv);
+  console.log(h, c);
+}
+"""
+
+JS_NEAR_MISS = """
+const crypto = require("crypto");
+
+function nearMiss(algorithm, options) {
+  // The algorithm is a variable, so nothing was observed to record.
+  const h = crypto.createHash(algorithm);
+  const c = crypto.createCipheriv(options.algorithm, options.key, options.iv);
+  const opts = { secureProtocol: options.protocol, ciphers: options.ciphers };
+  return [h, c, opts];
+}
+module.exports = { nearMiss };
+"""
+
+
+@pytest.fixture(scope="module")
+def js_findings(tmp_path_factory) -> dict[str, list[RawFinding]]:
+    root = tmp_path_factory.mktemp("js")
+    for name, source in (("weak.js", JS_WEAK), ("weak.ts", TS_WEAK), ("near.js", JS_NEAR_MISS)):
+        (root / name).write_text(source, encoding="utf-8", newline="\n")
+    ctx = ScanContext.build(
+        scan_id=uuid4(), work_dir=root, approved_paths=["weak.js", "weak.ts", "near.js"]
+    )
+    found = CodeCollector().collect(ctx)
+    return {
+        stem: [f for f in found if f.evidence_location.startswith(stem)]
+        for stem in ("weak.js", "weak.ts", "near.js")
+    }
+
+
+def test_node_crypto_is_recorded_with_the_algorithm_string_it_was_handed(js_findings) -> None:
+    by_algorithm = {f.algorithm_name: f for f in js_findings["weak.js"]}
+
+    assert by_algorithm["md5"].primitive is Primitive.HASH
+    assert by_algorithm["des-ede3-cbc"].primitive is Primitive.CIPHER
+    assert by_algorithm["rsa"].key_size == 1024
+    # A generator with no modulusLength is still an asset; it just has no size.
+    assert by_algorithm["ed25519"].key_size is None
+    assert len([f for f in js_findings["weak.js"] if f.algorithm_name == "rsa"]) == 1
+
+
+def test_node_tls_options_declare_a_protocol_and_a_cipher_string(js_findings) -> None:
+    protocol = [f for f in js_findings["weak.js"] if f.algorithm_name == "TLSv1_method"]
+    assert len(protocol) == 1
+    assert protocol[0].primitive is Primitive.PROTOCOL
+
+    # The declaration is the finding and the string is evidence, exactly as §7.4
+    # treats a CipherString that names no concrete suite.
+    ciphers = [f for f in js_findings["weak.js"] if f.algorithm_name == "ciphers"]
+    assert len(ciphers) == 1
+    assert ciphers[0].evidence_raw["declared"] == "DEFAULT@SECLEVEL=1"
+    assert ciphers[0].evidence_raw["observation"] == "cipher_selection_declared"
+
+
+def test_the_same_rules_apply_to_typescript(js_findings) -> None:
+    """A `js` rule is not applied to a `.ts` file; every rule lists both."""
+    assert {f.algorithm_name for f in js_findings["weak.ts"]} == {"sha1", "rc4"}
+
+
+def test_a_javascript_algorithm_held_in_a_variable_is_not_invented(js_findings) -> None:
+    assert js_findings["near.js"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Python — key exchange and signature, beyond hashes and ciphers
+# --------------------------------------------------------------------------- #
+
+PYTHON_ASYMMETRIC = """
+import hmac
+import hashlib
+import ssl
+from cryptography.hazmat.primitives.asymmetric import dh, ec, padding, rsa
+from Crypto.Cipher import ARC4, Blowfish, DES
+from Crypto.PublicKey import RSA
+
+def run(key, data, peer):
+    signing = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    agreement = ec.generate_private_key(ec.SECP256R1())
+    shared = agreement.exchange(ec.ECDH(), peer)
+    params = dh.generate_parameters(generator=2, key_size=2048)
+    pad = padding.PKCS1v15()
+    legacy = DES.new(key, DES.MODE_ECB)
+    stream = ARC4.new(key)
+    block = Blowfish.new(key, Blowfish.MODE_CBC)
+    imported = RSA.generate(1024)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
+    context.set_ciphers("DEFAULT@SECLEVEL=1")
+    mac = hmac.new(key, data, hashlib.sha1)
+    named = hmac.new(key, data, digestmod="md5")
+    return signing, shared, params, pad, legacy, stream, block, imported, context, mac, named
+"""
+
+PYTHON_NEAR_MISS = """
+import ssl
+
+class DES:
+    @staticmethod
+    def new(*args):
+        return None
+
+def run(context, chosen):
+    # Not pycryptodome: no `from Crypto.Cipher import DES` anywhere in the file.
+    local = DES.new(b"x")
+    # A cipher string held in a variable declares nothing this rule can read.
+    context.set_ciphers(chosen)
+    return local, ssl.CERT_REQUIRED
+"""
+
+
+@pytest.fixture(scope="module")
+def python_asymmetric_findings(tmp_path_factory) -> dict[str, list[RawFinding]]:
+    root = tmp_path_factory.mktemp("pyasym")
+    (root / "asym.py").write_text(PYTHON_ASYMMETRIC, encoding="utf-8", newline="\n")
+    (root / "near.py").write_text(PYTHON_NEAR_MISS, encoding="utf-8", newline="\n")
+    ctx = ScanContext.build(
+        scan_id=uuid4(), work_dir=root, approved_paths=["asym.py", "near.py"]
+    )
+    found = CodeCollector().collect(ctx)
+    return {
+        stem: [f for f in found if f.evidence_location.startswith(stem)]
+        for stem in ("asym.py", "near.py")
+    }
+
+
+def test_python_key_exchange_and_signature_are_recorded(python_asymmetric_findings) -> None:
+    by_algorithm = {f.algorithm_name: f for f in python_asymmetric_findings["asym.py"]}
+
+    assert by_algorithm["RSA"].key_size in (1024,)
+    assert by_algorithm["SECP256R1"].evidence_raw["observation"] == "ec_keygen"
+    assert by_algorithm["ECDH"].primitive is Primitive.KEY_EXCHANGE
+    assert (by_algorithm["DH"].primitive, by_algorithm["DH"].key_size) == (
+        Primitive.KEY_EXCHANGE,
+        2048,
+    )
+    assert by_algorithm["padding.PKCS1v15"].evidence_raw["observation"] == "rsa_padding"
+
+
+def test_pycryptodome_ciphers_are_recorded_under_their_module(
+    python_asymmetric_findings,
+) -> None:
+    names = {f.algorithm_name for f in python_asymmetric_findings["asym.py"]}
+
+    assert {"Crypto.Cipher.DES", "Crypto.Cipher.ARC4", "Crypto.Cipher.Blowfish"} <= names
+
+
+def test_python_ssl_declarations_and_hmac_digests_are_recorded(
+    python_asymmetric_findings,
+) -> None:
+    by_algorithm = {f.algorithm_name: f for f in python_asymmetric_findings["asym.py"]}
+
+    assert by_algorithm["PROTOCOL_TLSv1"].primitive is Primitive.PROTOCOL
+    assert by_algorithm["set_ciphers"].evidence_raw["declared"] == "DEFAULT@SECLEVEL=1"
+    assert by_algorithm["hashlib.sha1"].evidence_raw["observation"] in ("hash_call", "mac_call")
+    assert by_algorithm["md5"].evidence_raw["observation"] == "mac_call"
+
+
+def test_a_local_class_named_des_is_not_pycryptodome(python_asymmetric_findings) -> None:
+    """The import is required rather than assumed — `DES.new` is just a name."""
+    names = {f.algorithm_name for f in python_asymmetric_findings["near.py"]}
+
+    assert "Crypto.Cipher.DES" not in names
+    assert "set_ciphers" not in names
+
+
+# --------------------------------------------------------------------------- #
+# Java and C — key exchange, signature, and the TLS knobs
+# --------------------------------------------------------------------------- #
+
+JAVA_TLS = """
+import java.security.KeyPairGenerator;
+import java.security.Signature;
+import javax.crypto.KeyAgreement;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+
+public class Tls {
+    static void run(SSLSocket socket) throws Exception {
+        KeyPairGenerator sized = KeyPairGenerator.getInstance("RSA");
+        sized.initialize(1024);
+        KeyPairGenerator unsized = KeyPairGenerator.getInstance("DSA");
+        KeyAgreement agreement = KeyAgreement.getInstance("DH");
+        Signature signature = Signature.getInstance("SHA1withRSA");
+        SSLContext context = SSLContext.getInstance("TLSv1");
+        socket.setEnabledProtocols(new String[] {"TLSv1", "TLSv1.2"});
+        socket.setEnabledCipherSuites(new String[] {"TLS_RSA_WITH_3DES_EDE_CBC_SHA"});
+    }
+}
+"""
+
+C_TLS = """
+#include <openssl/dh.h>
+#include <openssl/ec.h>
+#include <openssl/objects.h>
+#include <openssl/ssl.h>
+
+void run(SSL_CTX *ctx) {
+    DH *dh = DH_new();
+    EC_KEY *key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    SSL_CTX_set_cipher_list(ctx, "HIGH:!aNULL:!MD5");
+    SSL_CTX_set_min_proto_version(ctx, TLS1_VERSION);
+    DES_cblock block;
+    DES_key_schedule schedule;
+    DES_set_key(&block, &schedule);
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def tls_api_findings(tmp_path_factory) -> dict[str, list[RawFinding]]:
+    root = tmp_path_factory.mktemp("tlsapi")
+    (root / "Tls.java").write_text(JAVA_TLS, encoding="utf-8", newline="\n")
+    (root / "tls.c").write_text(C_TLS, encoding="utf-8", newline="\n")
+    ctx = ScanContext.build(
+        scan_id=uuid4(), work_dir=root, approved_paths=["Tls.java", "tls.c"]
+    )
+    found = CodeCollector().collect(ctx)
+    return {
+        stem: [f for f in found if f.evidence_location.startswith(stem)]
+        for stem in ("Tls.java", "tls.c")
+    }
+
+
+def test_a_sized_java_generator_is_recorded_once_with_its_size(tls_api_findings) -> None:
+    """Two rules cover KeyPairGenerator; a sized one must not land in both."""
+    rsa = [f for f in tls_api_findings["Tls.java"] if f.algorithm_name == "RSA"]
+
+    assert [(f.key_size, f.evidence_raw["observation"]) for f in rsa] == [
+        (1024, "keypair_generation")
+    ]
+    # And a generator left at the provider default is still an asset.
+    dsa = [f for f in tls_api_findings["Tls.java"] if f.algorithm_name == "DSA"]
+    assert [(f.key_size, f.evidence_raw["observation"]) for f in dsa] == [
+        (None, "keypair_generation")
+    ]
+
+
+def test_a_java_signature_spelling_is_recorded_whole(tls_api_findings) -> None:
+    """"SHA1withRSA" names a broken hash and a vulnerable signature in one string.
+
+    The rule records the spelling; splitting it is §8's job, and the pack's
+    `sha1-with-rsa` entry is what resolves it to SHA-1 with RSA as a component.
+    """
+    signature = [f for f in tls_api_findings["Tls.java"] if f.algorithm_name == "SHA1withRSA"]
+
+    assert len(signature) == 1
+    assert signature[0].primitive is Primitive.SIGNATURE
+
+
+def test_java_tls_knobs_are_enumerated_per_declared_value(tls_api_findings) -> None:
+    java = tls_api_findings["Tls.java"]
+    protocols = [f for f in java if f.evidence_raw["observation"] == "protocol_version_declared"]
+
+    assert {f.algorithm_name for f in protocols} == {"TLSv1", "TLSv1.2"}
+    assert all(f.primitive is Primitive.PROTOCOL for f in protocols)
+    assert [f.algorithm_name for f in java if f.algorithm_name.startswith("TLS_")] == [
+        "TLS_RSA_WITH_3DES_EDE_CBC_SHA"
+    ]
+    context = [f for f in java if f.evidence_raw["observation"] == "protocol_declared"]
+    assert [f.algorithm_name for f in context] == ["TLSv1"]
+    assert {f.algorithm_name for f in java} >= {"DH"}
+
+
+def test_the_openssl_c_api_records_key_exchange_curves_and_tls_knobs(tls_api_findings) -> None:
+    by_algorithm = {f.algorithm_name: f for f in tls_api_findings["tls.c"]}
+
+    assert by_algorithm["DH"].primitive is Primitive.KEY_EXCHANGE
+    assert by_algorithm["NID_X9_62_prime256v1"].evidence_raw["observation"] == "curve_selected"
+    assert by_algorithm["SSL_CTX_set_cipher_list"].evidence_raw["declared"] == "HIGH:!aNULL:!MD5"
+    assert by_algorithm["TLS1_VERSION"].primitive is Primitive.PROTOCOL
+    assert by_algorithm["DES_set_key"].primitive is Primitive.CIPHER
+
+
+# --------------------------------------------------------------------------- #
+# Every new spelling resolves — a rule producing a name nothing resolves moves a
+# finding from absent to unknown, which is not progress (§8).
+# --------------------------------------------------------------------------- #
+
+
+def test_every_spelling_the_new_rules_produce_resolves_to_a_family(
+    go_findings, js_findings, python_asymmetric_findings, tls_api_findings
+) -> None:
+    from app.core.normalizer import get_alias_index, identity_key
+    from app.core.policy_loader import get_policy
+
+    aliases = get_alias_index(get_policy())
+    # Declaration markers are deliberately absent from the alias table: the knob
+    # is not an algorithm, and the declared string is evidence. See the header of
+    # policy/algorithm_aliases.yaml.
+    markers = {"set_ciphers", "ciphers", "SSL_CTX_set_cipher_list"}
+
+    produced = [
+        *go_findings["weak"],
+        *js_findings["weak.js"],
+        *js_findings["weak.ts"],
+        *python_asymmetric_findings["asym.py"],
+        *tls_api_findings["Tls.java"],
+        *tls_api_findings["tls.c"],
+    ]
+    unresolved = sorted(
+        {
+            finding.algorithm_name
+            for finding in produced
+            if finding.algorithm_name not in markers
+            and identity_key(finding.algorithm_name) not in aliases.by_name
+        }
+    )
+
+    assert unresolved == []

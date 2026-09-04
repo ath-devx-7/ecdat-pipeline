@@ -400,7 +400,7 @@ Emit findings for: SHA-1 signature algorithm, RSA key < 2048, expired or expirin
 
 ### 7.4 Config parsers
 
-Four format-specific parsers, each returning findings with `source_layer: config`:
+Format-specific parsers, each returning findings with `source_layer: config`:
 
 | File | Keys | Emit |
 |---|---|---|
@@ -408,6 +408,8 @@ Four format-specific parsers, each returning findings with `source_layer: config
 | `nginx.conf` | `ssl_protocols`, `ssl_ciphers`, `ssl_certificate*` | declared protocols, suites, cert paths |
 | `sshd_config` | `Ciphers`, `KexAlgorithms`, `MACs`, `HostKeyAlgorithms` | declared SSH crypto |
 | `java.security` | `jdk.tls.disabledAlgorithms`, `jdk.certpath.disabledAlgorithms` | declared disabled set |
+| Apache `ssl.conf` | `SSLProtocol`, `SSLCipherSuite`, `SSLCertificateFile`, `SSLCertificateKeyFile` | declared protocols, suites, cert paths |
+| `ssh_config` | `Ciphers`, `KexAlgorithms`, `MACs`, `HostKeyAlgorithms` | declared client-side SSH crypto |
 
 Use `crossplane` for nginx rather than regex. `configparser` handles openssl.cnf adequately. The other two are plain key-value.
 
