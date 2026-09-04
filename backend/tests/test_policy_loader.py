@@ -33,7 +33,10 @@ def test_shipped_policy_pack_loads(shipped_policy_dir: Path) -> None:
     # printed has no rule that would do it, and DH/DSA, which the pack ruled on
     # in pqc_targets.yaml while having no verdict for them.
     assert len(pack.algorithms) == 18
-    assert len(pack.pqc_targets) == 5
+    # Seven: §6's five, plus the two the layer scoping needed — OpenSSH's own
+    # key exchange, and the same ML-KEM target for a key exchange that was
+    # inventoried rather than observed on a service.
+    assert len(pack.pqc_targets) == 7
     assert pack.prefer_hybrid is True
     # Both mapping files are populated now — the alias table in step 5, the named
     # groups in step 7. The loader only has to hand them over as mappings; what

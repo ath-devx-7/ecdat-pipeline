@@ -22,6 +22,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.advisor import blocked_chains
 from app.core.alignment import describe_alignment
 from app.core.policy_loader import PolicyPack, get_policy
 from app.core.risk import score_scan
@@ -42,6 +43,7 @@ from app.models.finding import AlignmentNote, Finding, ProvenanceBlob
 from app.models.scan import Scan
 from app.schemas.results import (
     AlignmentNoteView,
+    BlockedChainView,
     AlignmentView,
     FindingBrief,
     FindingDetail,
@@ -413,11 +415,20 @@ def get_roadmap(scan_id: UUID, session: Session = Depends(get_session)) -> Roadm
     # Most overdue first within a wave; ties keep the location order.
     for items in waves.values():
         items.sort(key=lambda item: -(item.urgency_years if item.urgency_years is not None else -10**6))
+    # The same blocked rows, counted by work rather than by finding: forty rows
+    # behind one "upgrade OpenSSL, then enable TLS 1.3" are one procurement item
+    # and one config line. Beside the per-finding rows, not instead of them.
+    chains = blocked_chains(
+        (row, finding)
+        for finding in loaded.findings
+        for row in loaded.recommendations.get(finding.id, ())
+    )
     return RoadmapResponse(
         waves=waves,
         wave_counts={wave: len(items) for wave, items in waves.items()},
         unscored=unscored,
         z_years_used=loaded.z_years_used(),
+        blocked_chains=[BlockedChainView(**chain.as_dict()) for chain in chains],
     )
 
 

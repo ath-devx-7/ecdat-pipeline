@@ -234,11 +234,20 @@ export interface RoadmapItem {
   recommendations: Recommendation[];
 }
 
+export interface BlockedChain {
+  // Only `unmet` and `observed` — where each was seen is `assets`, and the
+  // per-finding rows keep the full entry.
+  prerequisites: { unmet: string; observed: string | null }[];
+  finding_count: number;
+  assets: string[];
+}
+
 export interface Roadmap {
   waves: Record<Wave, RoadmapItem[]>;
   wave_counts: Record<Wave, number>;
   unscored: number;
   z_years_used: number | null;
+  blocked_chains: BlockedChain[];
 }
 
 export interface CbomImportResponse {

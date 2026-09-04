@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type RecommendationStatus, type Roadmap as RoadmapData, type RoadmapItem } from "../api";
+import {
+  api,
+  type BlockedChain,
+  type RecommendationStatus,
+  type Roadmap as RoadmapData,
+  type RoadmapItem,
+} from "../api";
 import {
   STATUS_BADGE,
   STATUS_LABEL,
@@ -17,6 +23,12 @@ import {
 // §13 screen 6. Waves, not a sorted list: each wave is a block of work that can
 // start together. Every item carries its target, its prerequisites in the
 // order they have to be cleared, and the action class that sizes the job.
+//
+// Above them, the same blocked rows counted by work rather than by finding. A
+// blocked count scales with how thoroughly the scan searched; forty rows behind
+// one "upgrade OpenSSL, then enable TLS 1.3" are one procurement item and one
+// config line, and that is the number someone planning the migration needs.
+// Beside the per-finding rows, never instead of them.
 
 export default function Roadmap() {
   const { scanId = "" } = useParams();
@@ -43,6 +55,8 @@ export default function Roadmap() {
         </span>
       </div>
 
+      <Blockers chains={data.blocked_chains} />
+
       {WAVES.map((wave) => (
         <section key={wave} className="card">
           <div className="mb-1 flex items-baseline gap-3">
@@ -63,6 +77,47 @@ export default function Roadmap() {
         </section>
       ))}
     </div>
+  );
+}
+
+function Blockers({ chains }: { chains: BlockedChain[] }) {
+  if (chains.length === 0) return null;
+  const held = chains.reduce((total, chain) => total + chain.finding_count, 0);
+  return (
+    <section className="card">
+      <div className="mb-1 flex items-baseline gap-3">
+        <h2 className="font-semibold">What is standing in the way</h2>
+        <span className="text-sm text-slate-600">
+          {chains.length} distinct {chains.length === 1 ? "chain" : "chains"} holding {held}{" "}
+          {held === 1 ? "finding" : "findings"}
+        </span>
+      </div>
+      <p className="mb-3 text-xs text-slate-500">
+        The blocked rows below, grouped by the work they are waiting on and ordered with the
+        long-lead item first. Clearing one row clears every finding behind it.
+      </p>
+      <ul className="divide-y divide-slate-100">
+        {chains.map((chain, index) => (
+          <li key={index} className="grid gap-2 py-2 text-sm md:grid-cols-3">
+            <div className="md:col-span-2">
+              <ol className="list-decimal pl-4 text-xs">
+                {chain.prerequisites.map((p, position) => (
+                  <li key={position}>
+                    <code>{p.unmet}</code> — observed {p.observed ?? <em>nothing</em>}
+                  </li>
+                ))}
+              </ol>
+            </div>
+            <div className="text-xs">
+              <div className="font-medium">
+                {chain.finding_count} {chain.finding_count === 1 ? "finding" : "findings"}
+              </div>
+              <div className="font-mono text-slate-600">{chain.assets.join(", ")}</div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

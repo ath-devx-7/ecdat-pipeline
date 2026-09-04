@@ -209,6 +209,38 @@ def test_the_roadmap_groups_by_wave_with_targets_and_prerequisites(client, scan_
             assert item["urgency_years"] is None
 
 
+def test_the_roadmap_rolls_identical_blocker_chains_up_beside_the_rows(client, scan_id) -> None:
+    """§11 step 3, counted by work. Beside the per-finding rows, never instead of them."""
+    roadmap = client.get(f"/api/scans/{scan_id}/roadmap").json()
+
+    blocked = {
+        item["finding"]["id"]
+        for items in roadmap["waves"].values()
+        for item in items
+        for rec in item["recommendations"]
+        if rec["status"] == "blocked"
+    }
+    chains = roadmap["blocked_chains"]
+
+    assert sum(chain["finding_count"] for chain in chains) == len(blocked)
+    for chain in chains:
+        assert chain["prerequisites"] and chain["assets"]
+        assert all({"unmet", "observed"} == set(item) for item in chain["prerequisites"])
+
+
+def test_a_blocked_scan_reports_its_chain_once_with_the_asset_named(client, blocked_scan) -> None:
+    """The committed demo tree has no blocked rows, so this one is built to have one."""
+    roadmap = client.get(f"/api/scans/{blocked_scan.id}/roadmap").json()
+
+    assert len(roadmap["blocked_chains"]) == 1
+    chain = roadmap["blocked_chains"][0]
+    # Long-lead first: the procurement item, then the config line.
+    assert [item["unmet"] for item in chain["prerequisites"]] == ["openssl>=3.5", "TLS 1.3"]
+    assert [item["observed"] for item in chain["prerequisites"]] == [None, "TLS 1.2"]
+    assert chain["finding_count"] == 1
+    assert chain["assets"] == ["localhost:8443"]
+
+
 def test_moving_the_z_slider_rescores_the_scan(client, scan_id) -> None:
     """§12: Z is an assumption. Bring the quantum computer forward and the waves change."""
     before = client.get(f"/api/scans/{scan_id}/overview").json()["wave_counts"]

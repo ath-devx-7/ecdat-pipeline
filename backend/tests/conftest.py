@@ -177,6 +177,75 @@ def demo_scan(client: TestClient, demo_dir: Path, approve_all_files) -> dict:
 
 
 @pytest.fixture
+def blocked_scan(db_session: Session):
+    """A scan whose recommendation is blocked, without needing the demo lab.
+
+    A probed service that tops out at TLS 1.2 with no OpenSSL observed anywhere:
+    §11's blocker chain, both clauses unmet, one from an observation and one from
+    the absence of any. The committed demo tree produces no blocked rows of its
+    own, so the tests that need one build it here.
+    """
+    from app.core.advisor import advise_scan
+    from app.core.policy import apply_policy
+    from app.models.enums import (
+        CollectorName,
+        Confidence,
+        Primitive,
+        ScanMode,
+        ScanStatus,
+        SourceLayer,
+        SourceType,
+    )
+    from app.models.finding import Finding
+    from app.models.scan import Scan
+
+    scan = Scan(
+        mode=ScanMode.PROBE_ONLY,
+        source_type=SourceType.FOLDER,
+        source_ref="/srv/probe",
+        data_lifetime_years=5,
+        policy_version="2026.09",
+        status=ScanStatus.COMPLETE,
+    )
+    db_session.add(scan)
+    db_session.flush()
+
+    service = {"host": "localhost", "port": 8443}
+    db_session.add_all(
+        [
+            Finding(
+                scan_id=scan.id,
+                collector=CollectorName.NETWORK,
+                algorithm_name="ECDH",
+                algorithm_family="ECDH",
+                primitive=Primitive.KEY_EXCHANGE,
+                confidence=Confidence.HIGH,
+                source_layer=SourceLayer.LIVE,
+                evidence_location="localhost:8443",
+                evidence_raw={**service, "observation": "negotiated_group"},
+            ),
+            Finding(
+                scan_id=scan.id,
+                collector=CollectorName.NETWORK,
+                algorithm_name="TLS 1.2",
+                algorithm_family="TLS",
+                primitive=Primitive.PROTOCOL,
+                protocol_version="1.2",
+                confidence=Confidence.HIGH,
+                source_layer=SourceLayer.LIVE,
+                evidence_location="localhost:8443",
+                evidence_raw={**service, "observation": "protocol_version_accepted"},
+            ),
+        ]
+    )
+    db_session.flush()
+    apply_policy(db_session, scan.id)
+    advise_scan(db_session, scan)
+    db_session.commit()
+    return scan
+
+
+@pytest.fixture
 def source_folder(tmp_path: Path):
     """Make a scannable folder holding ``count`` files across a couple of levels."""
 

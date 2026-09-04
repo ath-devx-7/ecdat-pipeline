@@ -21,14 +21,68 @@ parameter_sets:
     source: "CNSA 2.0 (NSA, Sept 2022) for ML-KEM-1024 and ML-DSA-87; draft-ietf-tls-ecdhe-mlkem for SecP384r1MLKEM1024"
 
 targets:
+  # `source_layer` scopes this to the contexts its `requires` block can be
+  # tested in. A TLS 1.3 ceiling is a property of a deployed service — the probe
+  # observes it, a TLS configuration declares it — and it is meaningless against
+  # a `dh.generate_parameters()` call in a source file or a DH symbol in a
+  # binary. Without the scope the entry fired on those too and reported them
+  # blocked on a clause nothing there could ever satisfy.
   - id: kex-to-mlkem
-    match: { primitive: key_exchange, family: [RSA, ECDH, DH] }
+    match:
+      primitive: key_exchange
+      family: [RSA, ECDH, DH]
+      source_layer: [live, config]
     target: ML-KEM-768
     hybrid: X25519MLKEM768
     requires:
       protocol_min: "TLS 1.3"
       library: "openssl>=3.5"
     action_class: config
+    source: "NIST FIPS 203"
+
+  # SSH negotiates its own key exchange and knows nothing about TLS versions, so
+  # `kex-to-mlkem`'s prerequisites cannot be tested on an sshd_config line. This
+  # entry is the SSH answer: OpenSSH ships one post-quantum method, and it is
+  # already the hybrid — ML-KEM-768 with X25519, so `target` and `hybrid` are the
+  # same string rather than a pure ML-KEM that no SSH implementation offers.
+  #
+  # `observation` is what makes this an SSH rule rather than a config-layer rule:
+  # a `KexAlgorithms` line and an nginx key exchange are both config-layer DH,
+  # and telling an nginx host to set `mlkem768x25519-sha256` would be the wrong
+  # recommendation. Where both entries match — an sshd_config line matches this
+  # one on the observation and `kex-to-mlkem` on family alone — §11's first
+  # tie-break settles it: this route has no unmet prerequisite, and feasible now
+  # beats theoretically better.
+  - id: ssh-kex-to-mlkem
+    match:
+      primitive: key_exchange
+      family: [DH, ECDH]
+      source_layer: [config]
+      observation: [ssh_kex_declared]
+    target: mlkem768x25519-sha256
+    hybrid: mlkem768x25519-sha256
+    action_class: config
+    note: "Switching an SSH host over is a KexAlgorithms line; the method is itself a hybrid, so a classical fallback stays in place during negotiation."
+    source: "OpenSSH 9.9 release notes (mlkem768x25519-sha256, default in OpenSSH 10.0); RFC 9370 for the hybrid key-exchange method"
+
+  # The same target where the finding is an inventory entry rather than a
+  # deployment: a call site in source, a CBOM component, an algorithm named in a
+  # binary. The library clause still applies and is still testable — the binary
+  # collector reads OpenSSL versions out of the tree — but there is no service
+  # here whose protocol ceiling could be observed, so the entry does not carry
+  # one. `library_upgrade` is the same effort `sig-to-mldsa` states for the same
+  # shape of work: a new algorithm needs a library that provides it.
+  - id: kex-to-mlkem-inventory
+    match:
+      primitive: key_exchange
+      family: [RSA, ECDH, DH]
+      source_layer: [source, artifact]
+    target: ML-KEM-768
+    hybrid: X25519MLKEM768
+    requires:
+      library: "openssl>=3.5"
+    action_class: library_upgrade
+    note: "Named in source, a binary or an imported CBOM rather than observed on a service, so no protocol ceiling applies. Where this algorithm also terminates TLS, the deployment prerequisites are on that service's own finding."
     source: "NIST FIPS 203"
 
   - id: sig-to-mldsa

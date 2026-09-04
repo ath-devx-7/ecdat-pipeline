@@ -39,8 +39,16 @@ point in opposite directions on purpose:
   about that deployment. When several are seen, the *lowest* is the one reported,
   so borrowing evidence can block a target but can never confirm one that the
   asset's own evidence would not.
-* A **protocol** ceiling is never borrowed. It is a property of one service, and
-  what port 8444 negotiates says nothing about port 8443.
+* A **protocol** ceiling is a property of one service, and what port 8444
+  negotiates says nothing about port 8443 — so it is never taken from an
+  unrelated service. It is borrowed along one route only: the correlation §9
+  already recorded, an ``alignment_notes`` row linking this config finding's file
+  to a probed service. The borrowed entry then names the *service* in
+  ``observed_at`` and says so in its note, because a borrowed observation that
+  reads like a direct one is worse than no observation. Where a file is linked to
+  several services, the lowest ceiling is the one reported, so a borrowed ceiling
+  can block a target but never confirms one on an ambiguity. A file no note links
+  to anything keeps ``observed: null``.
 
 A requirement nothing observed at all is **not met**. It is listed in the chain
 with ``observed: null`` and the work item is to confirm it. Rounding an
@@ -77,7 +85,7 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import UUID
 
@@ -101,14 +109,16 @@ from app.models.enums import (
     SourceLayer,
     Verdict,
 )
-from app.models.finding import Finding
+from app.models.finding import AlignmentNote, Finding
 from app.models.scan import Scan
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "Advice",
+    "BlockedChain",
     "LIBRARY_OBSERVATIONS",
+    "MATCHABLE_OBSERVATIONS",
     "MATCH_KEYS",
     "MIGRATION_VERDICTS",
     "NO_TARGET_CITATION",
@@ -121,7 +131,9 @@ __all__ = [
     "advise_finding",
     "advise_scan",
     "asset_of",
+    "blocked_chains",
     "recommendation_counts",
+    "requirement_of",
     "select_parameter_set",
     "validate_targets",
 ]
@@ -131,7 +143,33 @@ MIGRATION_VERDICTS = frozenset({Verdict.BROKEN_NOW, Verdict.QUANTUM_VULNERABLE})
 
 #: The ``match`` keys a ``pqc_targets`` entry may use. Anything else is rejected
 #: at startup: an unrecognised key would not narrow the rule, it would be ignored.
-MATCH_KEYS = frozenset({"primitive", "family", "asset_lifetime_gt"})
+#: ``source_layer`` is how an entry says which context it was written for: a
+#: ``requires`` clause is only meaningful where the collectors can observe it, and
+#: a TLS ceiling means nothing on an SSH directive or a source-level call site.
+MATCH_KEYS = frozenset(
+    {"primitive", "family", "asset_lifetime_gt", "source_layer", "observation"}
+)
+
+#: Observation strings a ``pqc_targets`` entry may narrow itself with. The
+#: collectors write these into ``evidence_raw["observation"]``. ``source_layer``
+#: says which layer a rule was written for; this says which *kind* of declaration
+#: within it, which is what separates an ``sshd_config`` ``KexAlgorithms`` line
+#: from a TLS configuration's key exchange — both are config-layer key exchanges
+#: of the same family, and only one of them can be held to a TLS clause.
+#:
+#: Written out and checked at startup because an entry naming an observation no
+#: collector emits would not narrow itself, it would *silence* itself: the rule
+#: would match nothing and the findings it was written for would come back
+#: ``unknown``, with nothing to show that the pack has an answer for them.
+#: Widening this set is a one-line edit beside the collector that emits the value.
+MATCHABLE_OBSERVATIONS = frozenset(
+    {
+        "ssh_kex_declared",
+        "ssh_cipher_declared",
+        "ssh_mac_declared",
+        "ssh_host_key_algorithm_declared",
+    }
+)
 
 #: The ``requires`` clauses this module can test. A clause it cannot test is a
 #: prerequisite it would skip, and a skipped prerequisite is a recommendation
@@ -274,6 +312,11 @@ class ProtocolObservation:
     version: str
     location: str
     observation: str
+    #: set when this ceiling was observed on a *correlated* service rather than
+    #: on the asset asking for it — the probed ``host:port`` §9 linked it to
+    borrowed_from: str | None = None
+    #: the ``alignment_notes.asset_key`` that recorded the correlation
+    asset_key: str | None = None
 
 
 class ScanObservations:
@@ -282,13 +325,38 @@ class ScanObservations:
     Built once per scan from every finding in it — including the ones that need
     no migration themselves. A ``protocol_version_accepted`` row is nobody's
     migration item, but it is the evidence that decides someone else's.
+
+    The scan's alignment notes come in alongside the findings. §9 has already
+    worked out which config file speaks for which probed service, and that
+    correlation is the only route by which a protocol ceiling crosses from one
+    asset to another. Deriving a second correlation scheme here would be a second
+    chance to get the join wrong.
     """
 
-    def __init__(self, findings: Iterable[Finding]) -> None:
+    def __init__(
+        self,
+        findings: Iterable[Finding],
+        alignment_notes: Iterable[AlignmentNote] = (),
+    ) -> None:
         self._ceilings: dict[str, ProtocolObservation] = {}
         self._libraries: dict[str, dict[str, list[LibraryObservation]]] = {}
+        #: config asset → {probed service: the note's ``asset_key``}
+        self._links: dict[str, dict[str, str]] = {}
         for finding in findings:
             self._absorb(finding)
+        for note in alignment_notes:
+            self._link(note)
+
+    def _link(self, note: AlignmentNote) -> None:
+        """Record §9's correlation: this config finding's file speaks for that service."""
+        config, live = note.config_finding, note.live_finding
+        if config is None or live is None:
+            return
+        config_asset, service = asset_of(config), asset_of(live)
+        if not config_asset or not service or config_asset == service:
+            return
+        # First note wins the key for a pair; they all name the same correlation.
+        self._links.setdefault(config_asset, {}).setdefault(service, note.asset_key)
 
     def _absorb(self, finding: Finding) -> None:
         evidence = finding.evidence_raw or {}
@@ -321,8 +389,31 @@ class ScanObservations:
             self._libraries.setdefault(asset, {}).setdefault(name, []).append(seen)
 
     def protocol_ceiling(self, asset: str) -> ProtocolObservation | None:
-        """The highest protocol version this asset was seen to accept or declare."""
-        return self._ceilings.get(asset)
+        """The highest protocol version this asset was seen to accept or declare.
+
+        Failing that, the ceiling of a service §9 correlated this asset with —
+        marked as borrowed, so the prerequisite can say where it really came
+        from. An asset no alignment note links to anything gets nothing: what
+        8444 negotiates still says nothing about 8443.
+        """
+        own = self._ceilings.get(asset)
+        if own is not None:
+            return own
+
+        borrowed = [
+            (self._ceilings[service], service, asset_key)
+            for service, asset_key in self._links.get(asset, {}).items()
+            if service in self._ceilings
+        ]
+        if not borrowed:
+            return None
+        # Lowest first, the same direction ``libraries`` borrows in: evidence
+        # taken from somewhere else may block a target, never confirm one that
+        # the linked services disagree about.
+        seen, service, asset_key = min(
+            borrowed, key=lambda item: PROTOCOL_ORDER[item[0].version]
+        )
+        return replace(seen, borrowed_from=service, asset_key=asset_key)
 
     def libraries(self, asset: str, name: str) -> tuple[LibraryObservation, ...]:
         """Versions of ``name`` seen on this asset — or, failing that, anywhere in the scan."""
@@ -414,6 +505,18 @@ def _check_protocol(clause: str, asset: str, observations: ScanObservations) -> 
         )
     if PROTOCOL_ORDER[seen.version] >= PROTOCOL_ORDER[wanted]:
         return None
+    if seen.borrowed_from is not None:
+        # Traceability is the point. The reader has to be able to tell that
+        # nothing was measured on this file.
+        return Prerequisite(
+            unmet=clause,
+            observed=PROTOCOL_LABEL[seen.version],
+            observed_at=seen.borrowed_from,
+            note=(
+                f"observed on {seen.borrowed_from}, the service this asset is "
+                f"correlated with ({seen.asset_key}), not on this file"
+            ),
+        )
     return Prerequisite(
         unmet=clause,
         observed=PROTOCOL_LABEL[seen.version],
@@ -753,6 +856,24 @@ def validate_targets(policy: PolicyPack | None = None) -> None:
                     f"pqc_targets.yaml: entry '{rule.id}' names primitive {value!r}, which "
                     f"is not one of {', '.join(p.value for p in Primitive)}"
                 ) from exc
+        for value in _as_list(rule.match.get("observation")):
+            if str(value) not in MATCHABLE_OBSERVATIONS:
+                raise PolicyValidationError(
+                    f"pqc_targets.yaml: entry '{rule.id}' matches observation {value!r}, "
+                    "which no collector emits — the entry would match nothing. "
+                    f"Supported: {', '.join(sorted(MATCHABLE_OBSERVATIONS))}."
+                )
+        for value in _as_list(rule.match.get("source_layer")):
+            # A misspelt layer would not narrow the entry, it would silence it:
+            # the rule would match nothing and the findings it was written for
+            # would come back as `unknown` with no sign that a rule exists.
+            try:
+                SourceLayer(str(value))
+            except ValueError as exc:
+                raise PolicyValidationError(
+                    f"pqc_targets.yaml: entry '{rule.id}' names source_layer {value!r}, "
+                    f"which is not one of {', '.join(layer.value for layer in SourceLayer)}"
+                ) from exc
         _validate_lifetime(rule.match, f"entry '{rule.id}'")
 
         if not rule.target and not rule.compensating_control:
@@ -827,8 +948,20 @@ def advise_scan(
     findings = session.scalars(
         sa.select(Finding).where(Finding.scan_id == scan.id).order_by(Finding.id)
     ).all()
+    # §9 ran before the policy engine, so its notes are already stored. They are
+    # what lets a config finding be tested against the ceiling of the service it
+    # was correlated with.
+    notes = session.scalars(
+        sa.select(AlignmentNote)
+        .where(AlignmentNote.scan_id == scan.id)
+        .options(
+            sa.orm.joinedload(AlignmentNote.config_finding),
+            sa.orm.joinedload(AlignmentNote.live_finding),
+        )
+        .order_by(AlignmentNote.id)
+    ).all()
     # Every finding feeds the feasibility check, whether or not it gets a row.
-    observations = ScanObservations(findings)
+    observations = ScanObservations(findings, notes)
 
     verdicts = {
         row.finding_id: row.verdict
@@ -893,3 +1026,123 @@ def recommendation_counts(rows: Sequence[Recommendation]) -> dict[str, int]:
     for row in rows:
         counts[row.status.value] += 1
     return counts
+
+
+# --------------------------------------------------------------------------- #
+# Rolling the chains up — one work item, however many findings wear it
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class BlockedChain:
+    """One distinct blocker chain, and everything held behind it.
+
+    A per-finding blocked count scales with how thoroughly the scan searched,
+    not with how much work there is. Forty findings behind "upgrade OpenSSL,
+    then enable TLS 1.3" are one procurement item and one config line — and that
+    is the number someone planning the migration needs.
+    """
+
+    #: the work item and what was seen — ``unmet`` and ``observed`` per entry,
+    #: long-lead item first. Where it was seen is the ``assets`` list; carrying
+    #: one row's ``observed_at`` up here would name one asset out of several.
+    prerequisites: tuple[Mapping[str, Any], ...]
+    #: distinct findings blocked by exactly this chain
+    finding_count: int
+    #: the assets those findings sit on, in the order they were first seen
+    assets: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "prerequisites": [dict(item) for item in self.prerequisites],
+            "finding_count": self.finding_count,
+            "assets": list(self.assets),
+        }
+
+
+def requirement_of(unmet: str) -> str | None:
+    """Which ``_REQUIREMENT_ORDER`` key a chain entry came from, read back off the clause.
+
+    The stored row carries the clause as the pack wrote it, not the key it was
+    filed under, and the rollup has to order chains the same way the chains
+    themselves are ordered. ``None`` for a clause from a pack this build cannot
+    parse — it sorts last rather than crashing a read endpoint.
+    """
+    if _LIBRARY_CLAUSE.match(unmet):
+        return "library"
+    if _PROTOCOL_CLAUSE.match(unmet):
+        return "protocol_min"
+    return None
+
+
+def _chain_rank(prerequisites: Sequence[Mapping[str, Any]]) -> tuple[int, ...]:
+    ranks = []
+    for item in prerequisites:
+        key = requirement_of(str(item.get("unmet") or ""))
+        ranks.append(
+            _REQUIREMENT_ORDER.index(key) if key in _REQUIREMENT_ORDER else len(_REQUIREMENT_ORDER)
+        )
+    return tuple(ranks)
+
+
+def _chain_entries(
+    prerequisites: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """A chain reduced to the work it describes: what is unmet, and what was seen.
+
+    Two findings share a chain when the same clauses are unmet against the same
+    observations. What is deliberately *not* part of that identity is
+    ``observed_at`` — where the evidence came from is the ``assets`` list, and
+    keeping it in the key would split one "enable TLS 1.3" job into one row per
+    host. What *is* part of it is ``observed``: "openssl 1.1.1f" and "no openssl
+    observed at all" are different work, and rolling them together would hide a
+    confirmation task inside an upgrade task.
+    """
+    return tuple(
+        {"unmet": item.get("unmet"), "observed": item.get("observed")}
+        for item in prerequisites
+    )
+
+
+def blocked_chains(pairs: Iterable[tuple[Recommendation, Finding]]) -> list[BlockedChain]:
+    """Distinct blocker chains across a scan, long-lead-first.
+
+    Ordered by the same ``_REQUIREMENT_ORDER`` the chains themselves are built
+    with, so a chain that starts with a procurement item comes before one that
+    is only a config line; then by how much is held behind it.
+    """
+    grouped: dict[Any, dict[str, Any]] = {}
+    for row, finding in pairs:
+        if row.status is not RecommendationStatus.BLOCKED or not row.prerequisites:
+            continue
+        prerequisites = _chain_entries(row.prerequisites)
+        entry = grouped.setdefault(
+            tuple((item["unmet"], item["observed"]) for item in prerequisites),
+            {"prerequisites": prerequisites, "findings": set(), "assets": []},
+        )
+        entry["findings"].add(finding.id if finding.id is not None else id(finding))
+        asset = asset_of(finding)
+        if asset and asset not in entry["assets"]:
+            entry["assets"].append(asset)
+
+    chains = [
+        BlockedChain(
+            prerequisites=entry["prerequisites"],
+            finding_count=len(entry["findings"]),
+            assets=tuple(entry["assets"]),
+        )
+        for entry in grouped.values()
+    ]
+    chains.sort(
+        key=lambda chain: (
+            _chain_rank(chain.prerequisites),
+            -chain.finding_count,
+            # Last, so two chains of equal rank and equal weight still come out
+            # in the same order on every read of the same scan.
+            [
+                (str(item.get("unmet") or ""), str(item.get("observed") or ""))
+                for item in chain.prerequisites
+            ],
+        )
+    )
+    return chains

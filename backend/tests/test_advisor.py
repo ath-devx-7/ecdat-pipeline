@@ -25,10 +25,12 @@ from app.core.advisor import (
     advise_finding,
     advise_scan,
     asset_of,
+    blocked_chains,
     recommendation_counts,
     select_parameter_set,
     validate_targets,
 )
+from app.core.policy import pqc_targets_for
 from app.core.normalizer import normalize
 from app.core.policy import apply_policy
 from app.core.policy_loader import PolicyValidationError, load_policy
@@ -45,7 +47,7 @@ from app.models.enums import (
     SourceType,
     Verdict,
 )
-from app.models.finding import Finding
+from app.models.finding import AlignmentNote, Finding
 from app.models.scan import Scan
 from tests.conftest import reachable
 
@@ -97,6 +99,14 @@ def finding(family: str, primitive: Primitive, **kwargs) -> Finding:
     return Finding(algorithm_family=family, primitive=primitive, **kwargs)
 
 
+def at(port: int, host: str = HOST) -> dict:
+    """Put a ``finding()`` on a different probed service than the default one."""
+    return {
+        "evidence_location": f"{host}:{port}",
+        "evidence_raw": {"host": host, "port": port, "observation": "negotiated_group"},
+    }
+
+
 def protocol(version: str, *, accepted: bool = True, host: str = HOST, port: int = PORT) -> Finding:
     """A live protocol observation, in the two shapes the prober emits."""
     observation = "protocol_version_accepted" if accepted else "protocol_version_not_offered"
@@ -131,9 +141,41 @@ def library(version: str, *, location: str = "cbin/build/cryptodemo", soname: bo
     )
 
 
-def advise(target: Finding, verdict, pack, *, x=None, context=()):
+def config(
+    family: str,
+    primitive: Primitive,
+    *,
+    location: str,
+    observation: str,
+    **kwargs,
+) -> Finding:
+    """A declaration read out of a file, in the shape the config collector writes."""
+    kwargs.setdefault("algorithm_name", family)
+    return Finding(
+        collector=CollectorName.CONFIG,
+        algorithm_family=family,
+        primitive=primitive,
+        source_layer=SourceLayer.CONFIG,
+        confidence=Confidence.HIGH,
+        evidence_location=location,
+        evidence_raw={"observation": observation, "file": location.rsplit(":", 1)[0]},
+        **kwargs,
+    )
+
+
+def linked(config_finding: Finding, live_finding: Finding, asset_key: str) -> AlignmentNote:
+    """An ``alignment_notes`` row in the shape §9 writes it."""
+    return AlignmentNote(
+        config_finding=config_finding,
+        live_finding=live_finding,
+        asset_key=asset_key,
+        note="Observed on the service does not align with the declaration.",
+    )
+
+
+def advise(target: Finding, verdict, pack, *, x=None, context=(), notes=()):
     """Advice for one finding, with ``context`` findings supplying the observations."""
-    observations = ScanObservations([target, *context])
+    observations = ScanObservations([target, *context], notes)
     return advise_finding(
         target, verdict, data_lifetime_years=x, policy=pack, observations=observations
     )
@@ -308,6 +350,224 @@ def test_a_config_asset_is_the_file_and_its_declared_ceiling_counts(pack) -> Non
 
     assert advice.status is RecommendationStatus.BLOCKED
     assert [item.as_dict()["observed"] for item in advice.prerequisites] == ["TLS 1.2"]
+
+
+# --------------------------------------------------------------------------- #
+# Step 3 — borrowing a ceiling along §9's correlation
+# --------------------------------------------------------------------------- #
+
+
+def kex_in(location: str) -> Finding:
+    """A TLS key exchange declared in a config file — an nginx suite list, not SSH."""
+    return config(
+        "DH",
+        Primitive.KEY_EXCHANGE,
+        location=f"{location}:49",
+        observation="cipher_suite_declared",
+    )
+
+
+def floor_in(location: str) -> Finding:
+    """An ``openssl.cnf`` ``MinProtocol``. A floor, deliberately not a ceiling."""
+    return config(
+        "TLS",
+        Primitive.PROTOCOL,
+        location=f"{location}:12",
+        observation="protocol_floor",
+        algorithm_name="TLSv1.2",
+        protocol_version="1.2",
+    )
+
+
+def test_a_config_finding_linked_to_a_probed_service_inherits_its_ceiling(pack) -> None:
+    """§9 already worked out which file speaks for which service. Reuse that, do not re-derive it.
+
+    The file itself declares no ceiling — a ``MinProtocol`` floor says nothing
+    about the maximum — so before this the TLS clause was unobservable for every
+    config-layer key exchange and the chain read ``observed: null`` forever.
+    """
+    site = "weak-nginx/openssl.cnf"
+    kex, declaration = kex_in(site), floor_in(site)
+    service = [protocol("1.2"), protocol("1.3", accepted=False)]
+    note = linked(declaration, service[0], f"{HOST}:{PORT} via a library-wide declaration")
+
+    advice = one(
+        advise(
+            kex,
+            Verdict.QUANTUM_VULNERABLE,
+            pack,
+            x=5,
+            context=[declaration, *service, library("3.5.0", location=site)],
+            notes=[note],
+        )
+    )
+
+    assert advice.status is RecommendationStatus.BLOCKED
+    entry = advice.prerequisites[0].as_dict()
+    assert entry["unmet"] == "TLS 1.3"
+    assert entry["observed"] == "TLS 1.2"
+    # The service, not the file. A borrowed observation that reads like a direct
+    # one is worse than no observation at all.
+    assert entry["observed_at"] == f"{HOST}:{PORT}"
+    assert f"{HOST}:{PORT} via a library-wide declaration" in entry["note"]
+    assert "not on this file" in entry["note"]
+
+
+def test_a_config_finding_with_no_alignment_note_still_observes_nothing(pack) -> None:
+    """No note, no borrow. The correlation is the whole licence to reach across assets."""
+    site = "weak-nginx/openssl.cnf"
+    advice = one(
+        advise(
+            kex_in(site),
+            Verdict.QUANTUM_VULNERABLE,
+            pack,
+            x=5,
+            context=[floor_in(site), protocol("1.2"), library("3.5.0", location=site)],
+        )
+    )
+
+    assert advice.status is RecommendationStatus.BLOCKED
+    entry = advice.prerequisites[0].as_dict()
+    assert entry["unmet"] == "TLS 1.3"
+    assert entry["observed"] is None
+    assert "confirm" in entry["note"]
+
+
+def test_a_ceiling_is_never_borrowed_from_an_unlinked_service_in_the_same_scan(pack) -> None:
+    """8444 is in the scan and accepts TLS 1.3. Nothing links this file to it, so it is not evidence."""
+    site = "weak-nginx/openssl.cnf"
+    advice = one(
+        advise(
+            kex_in(site),
+            Verdict.QUANTUM_VULNERABLE,
+            pack,
+            x=5,
+            context=[protocol("1.3", port=8444), library("3.5.0", location=site)],
+        )
+    )
+
+    assert advice.status is RecommendationStatus.BLOCKED
+    assert advice.prerequisites[0].as_dict()["observed"] is None
+
+
+def test_borrowing_takes_the_lowest_ceiling_and_so_can_block_but_not_confirm(pack) -> None:
+    """A file linked to two services that disagree is held to the lower one.
+
+    The same direction ``libraries`` borrows in: evidence taken from somewhere
+    else may block a target, never confirm one the linked services dispute.
+    """
+    site = "shared/openssl.cnf"
+    kex, declaration = kex_in(site), floor_in(site)
+    modern = protocol("1.3", port=8444)
+    legacy = protocol("1.2", port=8443)
+    notes = [
+        linked(declaration, modern, "localhost:8444 via a library-wide declaration"),
+        linked(declaration, legacy, "localhost:8443 via a library-wide declaration"),
+    ]
+
+    advice = one(
+        advise(
+            kex,
+            Verdict.QUANTUM_VULNERABLE,
+            pack,
+            x=5,
+            context=[declaration, modern, legacy, library("3.5.0", location=site)],
+            notes=notes,
+        )
+    )
+
+    assert advice.status is RecommendationStatus.BLOCKED
+    entry = advice.prerequisites[0].as_dict()
+    assert entry["observed"] == "TLS 1.2"
+    assert entry["observed_at"] == "localhost:8443"
+
+
+def test_a_borrowed_ceiling_that_meets_the_clause_clears_it(pack) -> None:
+    """Borrowing is not one-way pessimism: a correlated service on TLS 1.3 settles the clause."""
+    site = "strong-nginx/openssl.cnf"
+    kex, declaration = kex_in(site), floor_in(site)
+    service = protocol("1.3")
+    advice = one(
+        advise(
+            kex,
+            Verdict.QUANTUM_VULNERABLE,
+            pack,
+            x=5,
+            context=[declaration, service, library("3.5.0", location=site)],
+            notes=[linked(declaration, service, f"{HOST}:{PORT} via a library-wide declaration")],
+        )
+    )
+
+    assert advice.status is RecommendationStatus.RECOMMENDED
+
+
+# --------------------------------------------------------------------------- #
+# Step 1 — the context a rule was written for
+# --------------------------------------------------------------------------- #
+
+
+def test_a_source_layer_scoped_entry_does_not_fire_on_another_layer(pack) -> None:
+    """``kex-to-mlkem`` needs a TLS 1.3 ceiling, and a Python call site has none.
+
+    Before the scope it matched anyway and held the call to that clause, which
+    no collector could ever observe there. The target itself is not lost — the
+    inventory entry carries the same ML-KEM with only the clause that *is*
+    testable at this layer — but the TLS one is gone from the chain.
+    """
+    call = Finding(
+        collector=CollectorName.CODE,
+        algorithm_name="dh.generate_parameters",
+        algorithm_family="DH",
+        primitive=Primitive.KEY_EXCHANGE,
+        source_layer=SourceLayer.SOURCE,
+        confidence=Confidence.HIGH,
+        evidence_location="pyapp/app.py:31",
+        evidence_raw={"observation": "crypto_call"},
+    )
+
+    assert [rule.id for rule in pqc_targets_for(call, pack, 5)] == ["kex-to-mlkem-inventory"]
+
+    advice = one(advise(call, Verdict.QUANTUM_VULNERABLE, pack, x=5))
+    assert advice.rule_id == "kex-to-mlkem-inventory"
+    assert [item.unmet for item in advice.prerequisites] == ["openssl>=3.5"]
+    assert advice.action_class is ActionClass.LIBRARY_UPGRADE
+
+
+def test_an_ssh_key_exchange_is_advised_from_the_ssh_entry_not_the_tls_one(pack) -> None:
+    """demo/README.md's open gap: a TLS rule firing on an ``sshd_config`` line.
+
+    SSH negotiates its own key exchange and has no TLS version to be held to.
+    The pack now carries OpenSSH's own method, and §11's first tie-break picks
+    it: this route has no unmet prerequisite, and feasible now beats
+    theoretically better. Nothing on the emitted row mentions TLS.
+    """
+    kex = config(
+        "DH",
+        Primitive.KEY_EXCHANGE,
+        location="sshd/sshd_config:27",
+        observation="ssh_kex_declared",
+        algorithm_name="diffie-hellman-group14-sha1",
+    )
+
+    advice = one(advise(kex, Verdict.QUANTUM_VULNERABLE, pack, x=20))
+
+    assert advice.rule_id == "ssh-kex-to-mlkem"
+    assert advice.status is RecommendationStatus.RECOMMENDED
+    assert advice.target == "mlkem768x25519-sha256"
+    assert advice.action_class is ActionClass.CONFIG
+    assert advice.prerequisites == ()
+    assert "RFC 9370" in advice.source_citation and "OpenSSH" in advice.source_citation
+    assert [item["rule_id"] for item in advice.rationale["passed_over"]] == ["kex-to-mlkem"]
+
+
+def test_the_ssh_entry_does_not_claim_a_tls_configs_key_exchange(pack) -> None:
+    """It is scoped by the observation, not by the layer alone — both are config-layer DH.
+
+    Telling an nginx host to set ``mlkem768x25519-sha256`` would be the wrong
+    recommendation, which §11 says is worse than an absent one.
+    """
+    matched = [rule.id for rule in pqc_targets_for(kex_in("weak-nginx/nginx.conf"), pack, 5)]
+    assert matched == ["kex-to-mlkem"]
 
 
 # --------------------------------------------------------------------------- #
@@ -510,6 +770,30 @@ def test_an_untestable_requirement_is_rejected_at_startup(policy_dir_factory) ->
         validate_targets(load_policy(bad))
 
 
+def test_an_unknown_source_layer_is_rejected_at_startup(policy_dir_factory) -> None:
+    """A misspelt layer would not narrow the entry, it would silence it.
+
+    The rule would match nothing, and the findings it was written for would come
+    back ``unknown`` with nothing to show that the pack has an answer for them.
+    """
+    bad = policy_dir_factory(
+        "pqc_targets.yaml",
+        lambda doc: doc["targets"][0]["match"].update({"source_layer": ["network"]}),
+    )
+    with pytest.raises(PolicyValidationError, match="network"):
+        validate_targets(load_policy(bad))
+
+
+def test_an_observation_no_collector_emits_is_rejected_at_startup(policy_dir_factory) -> None:
+    """Same failure, same answer: an entry that can never match is a pack defect."""
+    bad = policy_dir_factory(
+        "pqc_targets.yaml",
+        lambda doc: doc["targets"][0]["match"].update({"observation": ["ssh_kex_declred"]}),
+    )
+    with pytest.raises(PolicyValidationError, match="ssh_kex_declred"):
+        validate_targets(load_policy(bad))
+
+
 def test_a_malformed_library_clause_is_rejected(policy_dir_factory) -> None:
     bad = policy_dir_factory(
         "pqc_targets.yaml",
@@ -573,6 +857,41 @@ def test_advising_a_scan_writes_rows_and_counts_all_four_statuses(
     assert blocked.prerequisites[0]["unmet"] == "openssl>=3.5"
 
 
+def test_a_stored_alignment_note_carries_the_ceiling_through_advise_scan(
+    db_session, scan_factory
+) -> None:
+    """The borrow reads the ``alignment_notes`` rows §9 wrote, not a second join of its own."""
+    scan = scan_factory(5)
+    site = "weak-nginx/openssl.cnf"
+    kex, declaration = kex_in(site), floor_in(site)
+    accepted = protocol("1.2")
+    refused = protocol("1.3", accepted=False)
+    for row in (kex, declaration, accepted, refused):
+        row.scan_id = scan.id
+        db_session.add(row)
+    db_session.flush()
+    db_session.add(
+        AlignmentNote(
+            scan_id=scan.id,
+            live_finding_id=accepted.id,
+            config_finding_id=declaration.id,
+            asset_key=f"{HOST}:{PORT} via a library-wide declaration",
+            note="Observed on the service does not align with the declaration.",
+        )
+    )
+    db_session.flush()
+    apply_policy(db_session, scan.id)
+
+    rows = advise_scan(db_session, scan)
+
+    row = next(item for item in rows if item.finding_id == kex.id)
+    assert row.status is RecommendationStatus.BLOCKED
+    chain = {item["unmet"]: item for item in row.prerequisites}
+    assert chain["TLS 1.3"]["observed"] == "TLS 1.2"
+    assert chain["TLS 1.3"]["observed_at"] == f"{HOST}:{PORT}"
+    assert "not on this file" in chain["TLS 1.3"]["note"]
+
+
 def test_re_advising_replaces_the_rows(db_session, scan_factory) -> None:
     scan = scan_factory(20)
     db_session.add(finding("ECDH", Primitive.KEY_EXCHANGE, scan_id=scan.id))
@@ -590,17 +909,23 @@ def test_re_advising_replaces_the_rows(db_session, scan_factory) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_the_demo_produces_recommended_and_blocked_rows(demo_scan, db_session) -> None:
+def test_the_demo_produces_recommended_and_unknown_rows(demo_scan, db_session) -> None:
     """Build step 10's exit criterion, against the committed demo tree at X=20.
 
     The signatures get SLH-DSA, feasible with nothing observed. The three SSH key
-    exchanges are held to prerequisites the file tree cannot show are met, and
-    the two legacy TLS declarations match no rule at all.
+    exchanges get OpenSSH's own hybrid method, and the two legacy TLS
+    declarations match no rule at all.
+
+    Nothing is `blocked` in a files-only scan of this tree any more, and that is
+    the point of the SSH entry: those three rows used to be held to
+    `kex-to-mlkem`'s TLS 1.3 clause on an `sshd_config` line, where no collector
+    could ever observe it. `blocked` is exercised against the live weak host
+    below, where the ceiling is a real observation of a real refusal.
     """
     counts = demo_scan["recommendation_counts"]
     assert set(counts) == {"recommended", "blocked", "no_path", "unknown"}
     assert counts["recommended"] > 0
-    assert counts["blocked"] > 0
+    assert counts["blocked"] == 0
     assert counts["unknown"] > 0
 
     rows = db_session.execute(
@@ -650,3 +975,115 @@ def test_the_demo_weak_host_is_blocked_on_its_observed_protocol_ceiling(
         assert chain["TLS 1.3"]["observed_at"] == f"{HOST}:{PORT}"
         # Nothing in a probe says which OpenSSL the server runs, so it is not confirmed.
         assert chain["openssl>=3.5"]["observed"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Rolling the chains up — §11 step 3, counted by work rather than by finding
+# --------------------------------------------------------------------------- #
+
+
+def blocked_row(chain, finding: Finding) -> Recommendation:
+    """A blocked recommendation carrying ``chain``, without going through a scan."""
+    return Recommendation(
+        finding_id=finding.id,
+        status=RecommendationStatus.BLOCKED,
+        target="X25519MLKEM768",
+        prerequisites=[dict(item) for item in chain],
+        source_citation="NIST FIPS 203",
+    )
+
+
+def test_identical_blocker_chains_roll_up_into_one_work_item(db_session, scan_factory) -> None:
+    """A blocked count scales with the search; a chain count scales with the migration.
+
+    Four key exchanges across two services, all behind "upgrade OpenSSL, then
+    enable TLS 1.3", are one procurement item and one config line — and both
+    services are named, because that is where the work happens.
+    """
+    scan = scan_factory(5)
+    findings = [
+        finding("ECDH", Primitive.KEY_EXCHANGE),
+        finding("DH", Primitive.KEY_EXCHANGE),
+        finding("RSA", Primitive.KEY_EXCHANGE, key_size=2048),
+        finding("ECDH", Primitive.KEY_EXCHANGE, **at(8444)),
+    ]
+    for row in (*findings, protocol("1.2"), protocol("1.2", port=8444)):
+        row.scan_id = scan.id
+        db_session.add(row)
+    db_session.flush()
+    apply_policy(db_session, scan.id)
+    rows = advise_scan(db_session, scan)
+
+    by_finding = {row.finding_id: row for row in rows}
+    chains = blocked_chains((by_finding[item.id], item) for item in findings)
+
+    assert len(chains) == 1
+    chain = chains[0]
+    assert chain.prerequisites == (
+        {"unmet": "openssl>=3.5", "observed": None},
+        {"unmet": "TLS 1.3", "observed": "TLS 1.2"},
+    )
+    assert chain.finding_count == 4
+    assert sorted(chain.assets) == [f"{HOST}:8443", f"{HOST}:8444"]
+
+
+def test_a_chain_stops_at_what_was_observed_not_at_where(db_session, scan_factory) -> None:
+    """Two hosts stuck at different versions are two jobs; two hosts stuck at the same one are not."""
+    scan = scan_factory(5)
+    rows = [
+        finding("ECDH", Primitive.KEY_EXCHANGE),
+        finding("ECDH", Primitive.KEY_EXCHANGE, **at(8444)),
+        protocol("1.2"),
+        protocol("1.1", port=8444),
+    ]
+    for row in rows:
+        row.scan_id = scan.id
+        db_session.add(row)
+    db_session.flush()
+    apply_policy(db_session, scan.id)
+    advice = advise_scan(db_session, scan)
+
+    findings = {
+        row.id: row
+        for row in db_session.scalars(sa.select(Finding).where(Finding.scan_id == scan.id))
+    }
+    chains = blocked_chains((row, findings[row.finding_id]) for row in advice)
+
+    # Two chains, one per version observed. Equal rank and equal weight, so the
+    # last tie-break orders them — the same way on every read of this scan.
+    assert [chain.prerequisites[1]["observed"] for chain in chains] == ["TLS 1.1", "TLS 1.2"]
+    assert [chain.assets for chain in chains] == [(f"{HOST}:8444",), (f"{HOST}:8443",)]
+
+
+def test_chains_are_ordered_long_lead_first() -> None:
+    """The same ``_REQUIREMENT_ORDER`` the chains themselves are built with.
+
+    A procurement item outranks a config line whatever order the rows came out
+    of the database in, because that is the order the work has to be done in.
+    """
+    config_line = finding("ECDH", Primitive.KEY_EXCHANGE)
+    procurement = finding("DH", Primitive.KEY_EXCHANGE, **at(8444))
+    pairs = [
+        (blocked_row([{"unmet": "TLS 1.3", "observed": "TLS 1.2"}], config_line), config_line),
+        (blocked_row([{"unmet": "openssl>=3.5", "observed": None}], procurement), procurement),
+    ]
+
+    chains = blocked_chains(pairs)
+
+    assert [chain.prerequisites[0]["unmet"] for chain in chains] == ["openssl>=3.5", "TLS 1.3"]
+    assert [chain.finding_count for chain in chains] == [1, 1]
+
+
+def test_a_recommendation_that_is_not_blocked_is_not_a_chain() -> None:
+    """Only blocked rows have work standing in front of them."""
+    row = finding("ECDH", Primitive.KEY_EXCHANGE)
+    recommended = Recommendation(
+        finding_id=row.id,
+        status=RecommendationStatus.RECOMMENDED,
+        target="X25519MLKEM768",
+        prerequisites=[],
+        source_citation="NIST FIPS 203",
+    )
+
+    assert blocked_chains([(recommended, row)]) == []
+

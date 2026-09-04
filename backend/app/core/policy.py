@@ -471,6 +471,11 @@ def pqc_targets_for(
     primitive tells them apart. Getting that wrong makes the advisor wrong about
     half the time.
 
+    An entry may narrow itself further with ``source_layer`` — the context it was
+    written for. A rule whose prerequisites are properties of a running service
+    says so, rather than firing on a source file and then holding it to a clause
+    nothing there could ever satisfy.
+
     It lives here rather than in the advisor because §12's wave table needs an
     action class two steps before the advisor exists — ``wave_1`` and ``wave_2``
     are the same finding at different migration costs. Step 10 builds parameter
@@ -482,6 +487,25 @@ def pqc_targets_for(
         primitives = _match_values(target.match, "primitive")
         if primitives and finding.primitive.value not in primitives:
             continue
+
+        # An entry may state the layer it was written for. `kex-to-mlkem`
+        # requires a TLS 1.3 ceiling, which is a statement about a deployed
+        # service — meaningless against a `dh.generate_parameters()` call in a
+        # source file, where no collector can ever observe it. An entry that
+        # names no layer applies to every layer, as it always did.
+        layers = _match_values(target.match, "source_layer")
+        if layers and finding.source_layer.value not in layers:
+            continue
+
+        # And an entry may narrow further to the kind of declaration the
+        # collector recorded. An sshd_config `KexAlgorithms` line and an nginx
+        # key exchange are both config-layer DH; only the second one has a TLS
+        # version to be held to.
+        observations = _match_values(target.match, "observation")
+        if observations:
+            seen = (finding.evidence_raw or {}).get("observation")
+            if seen is None or str(seen) not in observations:
+                continue
 
         families = _match_values(target.match, "family")
         if families:

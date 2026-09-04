@@ -41,6 +41,7 @@ __all__ = [
     "RescoreRequest",
     "RescoreResponse",
     "RiskView",
+    "BlockedChainView",
     "RoadmapItem",
     "RoadmapResponse",
     "VerdictView",
@@ -221,6 +222,24 @@ class RoadmapItem(BaseModel):
     recommendations: list[RecommendationView] = Field(default_factory=list)
 
 
+class BlockedChainView(BaseModel):
+    """One distinct blocker chain and everything held behind it (§11 step 3).
+
+    The per-finding rows say what each finding needs. This says how many findings
+    need the same thing — which is the number that sizes the work, because a
+    blocked count scales with how thoroughly the scan searched and a chain count
+    scales with the migration.
+    """
+
+    #: ``unmet`` and ``observed`` per entry, long-lead item first. Where each was
+    #: observed is the ``assets`` list; the per-finding rows keep the full entry
+    prerequisites: list[dict[str, Any]]
+    #: distinct findings blocked by exactly this chain
+    finding_count: int
+    #: the assets those findings sit on — a file path, or a probed host:port
+    assets: list[str]
+
+
 class RoadmapResponse(BaseModel):
     """Findings grouped by wave (§13 screen 6). Every wave key is present, empty or not."""
 
@@ -229,6 +248,9 @@ class RoadmapResponse(BaseModel):
     #: findings with no wave — quantum_safe and hygiene need no migration
     unscored: int
     z_years_used: int | None
+    #: the same blocked rows rolled up by chain, long-lead-first. Beside the
+    #: per-finding rows, never instead of them.
+    blocked_chains: list[BlockedChainView] = Field(default_factory=list)
 
 
 class RescoreRequest(BaseModel):

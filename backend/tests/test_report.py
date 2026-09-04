@@ -94,11 +94,26 @@ def test_every_classified_finding_row_shows_its_citation(demo_report) -> None:
 
 def test_the_hard_parts_have_their_own_sections(demo_report) -> None:
     text = text_of(demo_report)
-    # The demo has blocked key exchanges and unclassified findings; both are shown, not footnoted.
-    assert "openssl>=3.5" in text
-    assert "observed: nothing" in text
+    # Nothing in a files-only scan of the demo tree is blocked any more — the SSH
+    # key exchanges match OpenSSH's own method rather than the TLS entry — so
+    # section 5 says so in words instead of going missing.
+    assert "Blocked prerequisites" in text
+    assert "No recommendation is blocked" in text
     assert "what the policy pack could not answer" in text
     assert "not checked" in text.lower()  # a files scan has no drift to compare
+
+
+def test_a_blocked_chain_is_printed_in_full(db_session, blocked_scan) -> None:
+    """The chain, its evidence and its order — §11 calls this the highest-value output.
+
+    The committed demo tree no longer produces one, so this renders a scan that
+    does: a service that tops out at TLS 1.2, with no OpenSSL observed anywhere.
+    """
+    text = text_of(render_html(db_session, blocked_scan))
+
+    assert "openssl>=3.5" in text
+    assert "observed: nothing" in text
+    assert "TLS 1.3" in text and "TLS 1.2" in text
 
 
 def test_a_scan_with_zero_findings_generates_a_valid_report(db_session, empty_scan) -> None:

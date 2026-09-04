@@ -129,8 +129,9 @@ nothing about the algorithms changed, only how long their traffic has to stay se
 **`wave_2` is empty against this pack, and that is the pack's doing rather than a
 bug.** `wave_2` holds quantum-vulnerable *confidentiality* findings whose migration
 is a code change or a hardware swap. Every quantum-vulnerable key exchange in the
-demo — RSA, ECDH, finite-field DH — matches `kex-to-mlkem`, whose `action_class` is
-`config`, so they all land in `wave_1`. Populating `wave_2` needs a
+demo — RSA, ECDH, finite-field DH — matches `kex-to-mlkem` on the wire and in a TLS
+config, or `ssh-kex-to-mlkem` on an `sshd_config` line; both carry `action_class:
+config`, so they all land in `wave_1`. Populating `wave_2` needs a
 `pqc_targets.yaml` entry mapping a harvestable primitive to `code_change` or
 `hardware`; the existing `cipher-upgrade` rule would do it, but DES, 3DES and RC4
 have no `algorithms.yaml` verdict, so they resolve to `unknown` and go to `verify`
@@ -343,12 +344,17 @@ binary collector's `OPENSSL_VERSION_TEXT` string on `cbin`, the protocol ceiling
 the probe of 8443. The chain is ordered with the procurement item first.
 
 **Which observation counts for which asset** (§11 step 3). The protocol ceiling is
-never borrowed: what 8444 negotiates says nothing about 8443. A library version *is*
+never taken from an unrelated service: what 8444 negotiates says nothing about 8443.
+It crosses from one asset to another along exactly one route — the correlation §9
+already recorded in `alignment_notes.asset_key` — so a config file that a note links
+to a probed service is tested against that service's ceiling, and the chain entry then
+names the *service* in `observed_at` and says in its note that nothing was measured on
+the file. A file no note links to anything observes nothing. A library version *is*
 borrowed from elsewhere in the same scan when the asset shows none of its own — the
-file tree is one deployment — and the entry names where it was seen. Where several are
-seen, the lowest is the one reported, so borrowed evidence can block a target but can
-never confirm one. A prerequisite nothing observed at all stays in the chain with
-`"observed": null`; the work item is to confirm it. Rounding an unobserved
+file tree is one deployment — and the entry names where it was seen. Both borrows run
+lowest-first, so borrowed evidence can block a target but can never confirm one the
+evidence disagrees about. A prerequisite nothing observed at all stays in the chain
+with `"observed": null`; the work item is to confirm it. Rounding an unobserved
 prerequisite to "presumably fine" is the optimistic direction this file rules out
 below, and a target recommended on that basis is the wrong recommendation §11 says is
 worse than none.
@@ -369,7 +375,8 @@ surfaces the item with the procurement lead time first.
 | Status | Members | Why |
 |---|---|---|
 | `recommended` | every certificate and `ssh-rsa` / `ecdsa-sha2-nistp256` signature → `SLH-DSA-SHA2-128s`; `hmac-md5` → `SHA-256` | At X=20 both signature rules match. ML-DSA needs an OpenSSL nothing in the tree has observed, so it is not feasible now; SLH-DSA needs nothing, and feasible beats theoretically better. Observe OpenSSL ≥ 3.5 and ML-DSA-87 wins instead — it is the cheaper action, and SLH-DSA's own note calls it a fallback |
-| `blocked` | the three `sshd_config` key exchanges → `SecP384r1MLKEM1024` | `kex-to-mlkem` requires TLS 1.3 and OpenSSL ≥ 3.5; the file shows neither. See the gaps table for why a TLS rule fires on an SSH line at all |
+| `recommended` | the three `sshd_config` key exchanges → `mlkem768x25519-sha256` | `ssh-kex-to-mlkem`, matched on the `ssh_kex_declared` observation. OpenSSH's own post-quantum method is already a hybrid of ML-KEM-768 and X25519, and switching a host over is a `KexAlgorithms` line |
+| `blocked` | none | These three rows used to be here, held to `kex-to-mlkem`'s TLS 1.3 ceiling on an SSH line where no collector could ever observe one. A `files` scan of this tree now has nothing blocked; `blocked` is what a **probe** of 8443 produces, where the ceiling is a real observation of a real refusal |
 | `unknown` | `TLSv1` and `TLSv1.1` declared in `weak-nginx/nginx.conf` | `broken_now`, and no `pqc_targets.yaml` entry covers a protocol. No target is emitted rather than a generic one |
 | `no_path` | none | Emitted only when a pack entry declares a `compensating_control` instead of a `target`. The shipped pack has none — see the gaps table |
 
@@ -523,7 +530,6 @@ papering over:
 | Weak TLS 1.2 cipher suites | The pack rules on protocol versions, not on suites |
 | ChaCha20 | The pack's `quantum_safe` entries cite NIST documents, which do not cover a cipher NIST has not approved. A citation for it would have to come from somewhere else |
 | `no_path` recommendations | A `no_path` row comes from a `pqc_targets.yaml` entry that declares a `compensating_control` (isolation, tunnelling, replacement) instead of a `target`. The shipped pack has no such entry, so the status has no members — which is honest: nothing in the demo has been shown to have no upgrade path, and the advisor does not decide that on its own |
-| SSH key exchange held to a TLS prerequisite | `kex-to-mlkem` is written for TLS — its `requires` names a TLS 1.3 ceiling — but its `match` is on primitive and family, so it also fires on `diffie-hellman-group14-sha1` in `sshd_config`, where the TLS clause can never be observed. The row is `blocked` with `"observed": null`, which is not wrong but is not the right work plan either. The fix is a cited SSH entry (OpenSSH's `mlkem768x25519-sha256`, RFC 9370 for the hybrid method), matched on the SSH observation, not a special case in the advisor |
 | Cipher-suite preference, and hybrid PQC group support | Not a pack gap but a **tool** gap, and the collector says so out loud. sslyze 6.3.1 reports accepted and rejected suites but not whether the server enforces its own ordering, and it enumerates groups from nassl's `OpenSslEcNidEnum` — classical curves only, so `X25519MLKEM768` is never offered and its absence proves nothing. Both produce an explicit `confidence: low` finding rather than silence: a readiness percentage that counts *not measured* as *not present* is a number nobody should act on |
 
 The hygiene observations — hardcoded key material, high-entropy literals, key files on
@@ -547,6 +553,16 @@ an entry with a citation, no code change:
 |---|---|
 | `sha2-safe` (SHA-256/384/512 → `quantum_safe`) | §6 requires SHA-256 to resolve to `quantum_safe` and prints no rule that would do it |
 | `dh-dsa-quantum` (DH, DSA → `quantum_vulnerable`) | Shor breaks discrete log as readily as factoring, and `pqc_targets.yaml` already names DH as a migration target. Ruling on ECDH but not on finite-field DH is not a demonstration of anything |
+
+The SSH gap that used to sit in the table above is closed the same way, and it took
+two entries rather than one because the rule that was firing had to be told what it
+was written for:
+
+| Added later | What it fixed |
+|---|---|
+| `source_layer` and `observation` in a `match` block | `kex-to-mlkem` names a TLS 1.3 ceiling in its `requires`, but matched on primitive and family alone, so it also fired on `diffie-hellman-group14-sha1` in `sshd_config` and on key exchanges named in source or in a CBOM — and then held all of them to a clause no collector could ever observe there. An entry can now say which layer, and which kind of declaration, it was written for. An unknown value in either is refused at startup: it would not narrow the entry, it would silence it |
+| `ssh-kex-to-mlkem` (OpenSSH 9.9 release notes; RFC 9370) | The SSH answer, matched on `ssh_kex_declared` rather than on the config layer as a whole — telling an nginx host to set `mlkem768x25519-sha256` would be the wrong recommendation. It states no unmet prerequisite, so §11's first tie-break picks it over `kex-to-mlkem` where both match |
+| `kex-to-mlkem-inventory` (NIST FIPS 203) | The same ML-KEM target for a key exchange named in source, in a binary or in an imported CBOM. Scoping the TLS rule away from those layers would otherwise have taken the target with it, and `unknown` is the wrong answer when the pack plainly has one — it is only the *protocol* clause that is meaningless there. The library clause stays, because the binary collector can observe it |
 
 Closing these is a **policy-pack edit with a citation**, not a code change — which is
 the property the pack exists to have. Each needs a `source` field or the loader
