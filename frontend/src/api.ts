@@ -203,8 +203,15 @@ export interface AlignmentView {
   scope_skipped: string[];
 }
 
+export interface MoscaSummary {
+  subject: number;
+  overdue: number;
+  unknown_primitive: number;
+}
+
 export interface Overview {
   scan: Scan;
+  mosca: MoscaSummary;
   finding_count: number;
   readiness: Readiness;
   verdict_counts: Record<Verdict, number>;

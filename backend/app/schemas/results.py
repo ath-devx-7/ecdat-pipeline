@@ -33,6 +33,7 @@ __all__ = [
     "FindingBrief",
     "FindingDetail",
     "FindingPage",
+    "MoscaSummary",
     "OverviewResponse",
     "PolicyResponse",
     "Readiness",
@@ -175,6 +176,24 @@ class AlignmentView(BaseModel):
     scope_skipped: list[str] = Field(default_factory=list)
 
 
+class MoscaSummary(BaseModel):
+    """What the Z slider can and cannot move (§12).
+
+    Mosca's inequality applies only to quantum-vulnerable confidentiality
+    primitives — key exchange and ciphers. A scan with none of those has a wave
+    chart that does not change with Z, and the UI has to say so rather than let
+    the slider look broken.
+    """
+
+    #: quantum-vulnerable findings Mosca applies to — the only ones Z can move
+    subject: int
+    #: of those, overdue at the Z the stored rows were scored with
+    overdue: int
+    #: quantum-vulnerable findings whose primitive was never observed; they sit
+    #: in `verify` until someone confirms what the key is used for
+    unknown_primitive: int
+
+
 class OverviewResponse(BaseModel):
     scan: ScanResponse
     finding_count: int
@@ -190,6 +209,7 @@ class OverviewResponse(BaseModel):
     policy: PolicyResponse
     #: the Z the stored risk rows were scored with — the slider's current position
     z_years_used: int | None
+    mosca: MoscaSummary
     provenance_count: int
 
 

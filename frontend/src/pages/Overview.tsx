@@ -187,9 +187,33 @@ export default function Overview() {
             />
             <p className="text-xs text-slate-500">
               Mosca: (X + Y) − Z &gt; 0 means overdue. Y = {policy.y_years_default} (migration
-              duration, from the pack). Move Z and the waves move with it; wave 0 does not, because
-              broken today is not a quantum deadline.
+              duration, from the pack). Only quantum-vulnerable key exchanges and ciphers move with
+              Z; wave 0 does not, because broken today is not a quantum deadline.
             </p>
+            {data.mosca.subject > 0 ? (
+              <p className="mt-1 text-xs text-slate-700">
+                <strong>{data.mosca.subject}</strong> finding{data.mosca.subject === 1 ? "" : "s"} subject to
+                Mosca here; <strong>{data.mosca.overdue}</strong> overdue at Z = {data.z_years_used ?? z}
+                {scan.data_lifetime_years !== null && (
+                  <>
+                    {" "}(overdue while Z &lt; {scan.data_lifetime_years + policy.y_years_default})
+                  </>
+                )}
+                .
+              </p>
+            ) : (
+              <p className="mt-1 rounded bg-slate-100 p-2 text-xs text-slate-700">
+                <strong>Nothing in this scan moves with Z.</strong> It has no quantum-vulnerable key
+                exchange or cipher findings, so Mosca's inequality has nothing to apply to.
+                {data.mosca.unknown_primitive > 0 && (
+                  <>
+                    {" "}{data.mosca.unknown_primitive} quantum-vulnerable finding
+                    {data.mosca.unknown_primitive === 1 ? "" : "s"} of unknown use sit in Verify:
+                    confirm what those keys are for and Mosca can be evaluated.
+                  </>
+                )}
+              </p>
+            )}
           </div>
         </div>
       </div>

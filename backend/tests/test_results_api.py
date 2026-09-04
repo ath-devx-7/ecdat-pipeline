@@ -59,6 +59,12 @@ def test_the_overview_shows_every_status_and_states_the_readiness_denominator(cl
     # The unassessed count sits beside the number rather than inside it (§7.5).
     assert readiness["unassessed"] == overview["verdict_counts"]["unknown"] > 0
 
+    # The slider can only move what Mosca applies to, and the overview says how many that is.
+    # Everything overdue is in wave_1 or wave_2; what is subject but not overdue sits in wave_3.
+    assert overview["mosca"]["overdue"] == overview["wave_counts"]["wave_1"] + overview["wave_counts"]["wave_2"]
+    assert overview["mosca"]["subject"] >= overview["mosca"]["overdue"] > 0
+    assert overview["mosca"]["unknown_primitive"] >= 0
+
     assert overview["policy"]["version"] == "2026.09"
     assert overview["alignment"]["status"] == "skipped"
     assert "no live findings" in overview["alignment"]["reason"]
@@ -221,6 +227,9 @@ def test_moving_the_z_slider_rescores_the_scan(client, scan_id) -> None:
     overview = client.get(f"/api/scans/{scan_id}/overview").json()
     assert overview["z_years_used"] == 40
     assert overview["wave_counts"] == later["wave_counts"]
+    # At Z=40 nothing is overdue, but the same findings are still the ones Z can move.
+    assert overview["mosca"]["overdue"] == 0
+    assert overview["mosca"]["subject"] == before["wave_1"] + before["wave_2"]
 
     assert client.post(f"/api/scans/{scan_id}/rescore", json={"z_years": -1}).status_code == 422
     assert client.post(f"/api/scans/{uuid4()}/rescore", json={"z_years": 5}).status_code == 404

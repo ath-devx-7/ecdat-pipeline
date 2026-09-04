@@ -31,6 +31,7 @@ from app.models.analysis import Recommendation, RiskScore, VerdictRow
 from app.models.enums import (
     CollectorName,
     Confidence,
+    Primitive,
     RecommendationStatus,
     ScanStatus,
     SourceLayer,
@@ -45,6 +46,7 @@ from app.schemas.results import (
     FindingBrief,
     FindingDetail,
     FindingPage,
+    MoscaSummary,
     OverviewResponse,
     PolicyResponse,
     Readiness,
@@ -185,6 +187,24 @@ def _readiness(loaded: _Loaded) -> Readiness:
     )
 
 
+def _mosca(loaded: _Loaded) -> MoscaSummary:
+    """Counted from the stored rationale, so it matches the rows the chart shows."""
+    subject = overdue = unknown_primitive = 0
+    for finding in loaded.all_findings:
+        verdict = loaded.verdicts.get(finding.id)
+        score = loaded.scores.get(finding.id)
+        if verdict is None or verdict.verdict is not Verdict.QUANTUM_VULNERABLE:
+            continue
+        if finding.primitive is Primitive.UNKNOWN:
+            unknown_primitive += 1
+            continue
+        if score is not None and (score.rationale or {}).get("hndl_applicable"):
+            subject += 1
+            if score.urgency_years is not None and score.urgency_years > 0:
+                overdue += 1
+    return MoscaSummary(subject=subject, overdue=overdue, unknown_primitive=unknown_primitive)
+
+
 def _alignment_view(session: Session, scan: Scan) -> AlignmentView:
     result = describe_alignment(session, scan)
     if result.skipped:
@@ -280,6 +300,7 @@ def get_overview(
         alignment=_alignment_view(session, scan),
         policy=policy_view(policy),
         z_years_used=loaded.z_years_used(),
+        mosca=_mosca(loaded),
         provenance_count=int(provenance_count or 0),
     )
 
