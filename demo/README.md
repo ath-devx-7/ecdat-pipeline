@@ -249,12 +249,25 @@ where a scanner has to resist claiming more than it knows.
 **The key generation has no primitive.** `issue_signing_key()` says in its name what
 the key is for, but `rsa.generate_private_key(key_size=1024)` does not, and the
 collector reports the call, not the function it sits in. It is `broken_now` on key size
-alone, which lands in `wave_0` whatever the primitive — and an RSA key of unknown use
-gets no `pqc_targets` match, so its recommendation is `unknown` rather than a guess
-between ML-DSA and ML-KEM (§11). A 2048-bit key generated the same way is
-`quantum_vulnerable` — Shor does not care what the key is for — and goes to `verify`,
-because whether Mosca applies turns on the use nobody recorded. The same holds for `kpg.initialize(1024)` in `javaapp`
-and `RSA_generate_key_ex(rsa, 1024, ...)` in `cbin`.
+alone, which lands in `wave_0` whatever the primitive. A 2048-bit key generated the
+same way is `quantum_vulnerable` — Shor does not care what the key is for — and goes to
+`verify`, because whether Mosca applies turns on the use nobody recorded. The same
+holds for `kpg.initialize(1024)` in `javaapp` and `RSA_generate_key_ex(rsa, 1024, ...)`
+in `cbin`.
+
+**And it still gets a recommendation.** RSA is the one family
+`algorithm_aliases.yaml` deliberately gives no default primitive, so these rows used to
+reach the report `quantum_vulnerable` with no target — the largest single source of
+`unknown` advice in a real scan. `rsa-unstated-use-kem` and `rsa-unstated-use-sig` now
+emit **both** routes: they agree on every one of §11's tie-breaks, so the advisor
+prints them together with the tradeoff in `side_effects`. That is not the guess §11
+forbids — the pack has a cited target for each use (FIPS 203, FIPS 204), and what is
+missing is one observation about which use this is. The `verify` wave already said
+exactly that; now the recommendation says it too. Both routes are scoped to
+`source_layer: [source, artifact]`, because the network, config and certificate
+collectors all record the primitive they observed: a *live* finding without one is a
+gap in a collector, and answering it there would put a key-exchange target on a service
+without `kex-to-mlkem`'s TLS 1.3 clause ever having been tested.
 
 **Key material stays out of the database.** The `hardcoded-key` and
 `high-entropy-literal` findings record the line, the literal's length and its entropy,
@@ -374,10 +387,10 @@ surfaces the item with the procurement lead time first.
 
 | Status | Members | Why |
 |---|---|---|
-| `recommended` | every certificate and `ssh-rsa` / `ecdsa-sha2-nistp256` signature → `SLH-DSA-SHA2-128s`; `hmac-md5` → `SHA-256` | At X=20 both signature rules match. ML-DSA needs an OpenSSL nothing in the tree has observed, so it is not feasible now; SLH-DSA needs nothing, and feasible beats theoretically better. Observe OpenSSL ≥ 3.5 and ML-DSA-87 wins instead — it is the cheaper action, and SLH-DSA's own note calls it a fallback |
+| `recommended` | every certificate *key* and `ssh-rsa` / `ecdsa-sha2-nistp256` signature → `SLH-DSA-SHA2-128s`; `hmac-md5` and the SHA-1 certificate *signatures* → `SHA-256` | At X=20 both signature rules match. ML-DSA needs an OpenSSL nothing in the tree has observed, so it is not feasible now; SLH-DSA needs nothing, and feasible beats theoretically better. Observe OpenSSL ≥ 3.5 and ML-DSA-87 wins instead — it is the cheaper action, and SLH-DSA's own note calls it a fallback |
 | `recommended` | the three `sshd_config` key exchanges → `mlkem768x25519-sha256` | `ssh-kex-to-mlkem`, matched on the `ssh_kex_declared` observation. OpenSSH's own post-quantum method is already a hybrid of ML-KEM-768 and X25519, and switching a host over is a `KexAlgorithms` line |
-| `blocked` | none | These three rows used to be here, held to `kex-to-mlkem`'s TLS 1.3 ceiling on an SSH line where no collector could ever observe one. A `files` scan of this tree now has nothing blocked; `blocked` is what a **probe** of 8443 produces, where the ceiling is a real observation of a real refusal |
-| `unknown` | `TLSv1` and `TLSv1.1` declared in `weak-nginx/nginx.conf` | `broken_now`, and no `pqc_targets.yaml` entry covers a protocol. No target is emitted rather than a generic one |
+| `blocked` | the four RSA key generations of unstated use → both routes each, eight rows | `rsa-unstated-use-kem` and `rsa-unstated-use-sig` tie on every tie-break, so both are emitted, and both are held to `openssl>=3.5` — which the binary collector answers with the 1.1 it read out of `cbin/build/cryptodemo`. Borrowed library evidence is used in the one direction §11 allows: it blocks a target, it never confirms one. The three SSH rows are *not* here any more, and used to be: they were held to `kex-to-mlkem`'s TLS 1.3 ceiling on an SSH line where no collector could ever observe one. A blocked **protocol** ceiling is what a probe of 8443 produces, where the refusal is real |
+| `unknown` | `TLSv1` and `TLSv1.1` declared in `weak-nginx/nginx.conf`; `AES` in ECB mode in `pyapp/app.py` | `broken_now` all three, and no `pqc_targets.yaml` entry covers a protocol or an AES *mode* — `cipher-upgrade` names the broken cipher families, and what is wrong with `aes-ecb` is not the family. No target is emitted rather than a generic one. Both are closable the way the table below says gaps are closed |
 | `no_path` | none | Emitted only when a pack entry declares a `compensating_control` instead of a `target`. The shipped pack has none — see the gaps table |
 
 Only `broken_now` and `quantum_vulnerable` findings get a row. An `unknown` verdict
@@ -571,6 +584,17 @@ was written for:
 | `source_layer` and `observation` in a `match` block | `kex-to-mlkem` names a TLS 1.3 ceiling in its `requires`, but matched on primitive and family alone, so it also fired on `diffie-hellman-group14-sha1` in `sshd_config` and on key exchanges named in source or in a CBOM — and then held all of them to a clause no collector could ever observe there. An entry can now say which layer, and which kind of declaration, it was written for. An unknown value in either is refused at startup: it would not narrow the entry, it would silence it |
 | `ssh-kex-to-mlkem` (OpenSSH 9.9 release notes; RFC 9370) | The SSH answer, matched on `ssh_kex_declared` rather than on the config layer as a whole — telling an nginx host to set `mlkem768x25519-sha256` would be the wrong recommendation. It states no unmet prerequisite, so §11's first tie-break picks it over `kex-to-mlkem` where both match |
 | `kex-to-mlkem-inventory` (NIST FIPS 203) | The same ML-KEM target for a key exchange named in source, in a binary or in an imported CBOM. Scoping the TLS rule away from those layers would otherwise have taken the target with it, and `unknown` is the wrong answer when the pack plainly has one — it is only the *protocol* clause that is meaningless there. The library clause stays, because the binary collector can observe it |
+
+Four more entries closed the other half of the same problem: findings the pack ruled
+**vulnerable or broken and then had nothing to say about**, which is the worst row a
+report can print. Same method — cited entries, no code change:
+
+| Added later | What it fixed |
+|---|---|
+| `DSA` added to `sig-to-mldsa`'s families (NIST FIPS 204) | `dh-dsa-quantum` rules DSA `quantum_vulnerable` and the alias table gives every DSA spelling `primitive: signature`, so every DSA finding reached the advisor and matched nothing at all. The two halves of the pack disagreed; this entry was simply written before the verdict rule was |
+| `family` added to `sig-longlived-root`'s match | Without it, this was the widest entry in the pack: *every* `primitive: signature` finding above the 10-year line matched, digests included. A SHA-1-signed certificate came back "adopt SLH-DSA" — an answer about the key when what is disallowed is the hash |
+| `sig-hash-upgrade-issued` / `sig-hash-upgrade-source` (NIST SP 800-131A Rev.2 §9; SP 800-107 Rev.1 §5.1) | §7.3 records a certificate's signature algorithm as `primitive: signature` and §8 collapses `sha1WithRSAEncryption` to family SHA-1, so `hash-upgrade` — which matches `primitive: hash` — never saw it, and a SHA-1-signed certificate was `broken_now` with no advice. Two entries because the work differs and the action class is the pack's estimate of it: re-issuing a certificate compiles nothing, changing a digest at a signing call site is an edit |
+| `rsa-unstated-use-kem` / `rsa-unstated-use-sig` (NIST FIPS 203, 204) | The largest source of `unknown` advice in a real scan — see §C. Both routes, emitted together, rather than one guessed at |
 
 Closing these is a **policy-pack edit with a citation**, not a code change — which is
 the property the pack exists to have. Each needs a `source` field or the loader

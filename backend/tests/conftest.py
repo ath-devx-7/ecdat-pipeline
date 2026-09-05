@@ -182,8 +182,9 @@ def blocked_scan(db_session: Session):
 
     A probed service that tops out at TLS 1.2 with no OpenSSL observed anywhere:
     §11's blocker chain, both clauses unmet, one from an observation and one from
-    the absence of any. The committed demo tree produces no blocked rows of its
-    own, so the tests that need one build it here.
+    the absence of any. The committed demo tree blocks only on library clauses
+    answered by a borrowed observation, so the tests that need an unobserved
+    prerequisite and a protocol ceiling build one here.
     """
     from app.core.advisor import advise_scan
     from app.core.policy import apply_policy

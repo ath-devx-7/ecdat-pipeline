@@ -85,8 +85,17 @@ targets:
     note: "Named in source, a binary or an imported CBOM rather than observed on a service, so no protocol ceiling applies. Where this algorithm also terminates TLS, the deployment prerequisites are on that service's own finding."
     source: "NIST FIPS 203"
 
+  # `DSA` rides along with the other three. `algorithms.yaml`'s `dh-dsa-quantum`
+  # rules it quantum_vulnerable — Shor breaks the discrete logarithm as readily
+  # as it breaks factoring — and the alias table gives every DSA spelling
+  # `primitive: signature`, so every DSA finding in a scan reached this list,
+  # matched nothing and was reported as vulnerable with no target at all. That
+  # was not a deliberate gap: this entry was written before the verdict rule was.
+  # FIPS 204 covers it as it covers the other three; NIST FIPS 186-5 §1.1, which
+  # approves DSA for verifying legacy signatures only, is why it is not a case of
+  # migrating something that was otherwise fine.
   - id: sig-to-mldsa
-    match: { primitive: signature, family: [RSA, ECDSA, EdDSA] }
+    match: { primitive: signature, family: [RSA, ECDSA, EdDSA, DSA] }
     target: ML-DSA-65
     requires:
       library: "openssl>=3.5"
@@ -94,8 +103,17 @@ targets:
     side_effects: "ML-DSA signatures ~2.4 KB vs ~64 B for ECDSA. Check cert chains and constrained devices."
     source: "NIST FIPS 204"
 
+  # `family` scopes this to the asymmetric signature algorithms. Without it this
+  # was the widest entry in the pack — every `primitive: signature` finding above
+  # the 10-year line matched, including the ones that are about a digest rather
+  # than a key. A SHA-1-signed certificate came back "adopt SLH-DSA", which is an
+  # answer about the wrong half of the algorithm: what is broken there is the
+  # hash, and `sig-hash-upgrade-issued` below is what it needs.
   - id: sig-longlived-root
-    match: { primitive: signature, asset_lifetime_gt: 10 }
+    match:
+      primitive: signature
+      family: [RSA, ECDSA, EdDSA, DSA]
+      asset_lifetime_gt: 10
     target: SLH-DSA-SHA2-128s
     action_class: hardware
     note: "Hash-based fallback for long-lived roots of trust."
@@ -107,8 +125,92 @@ targets:
     action_class: code_change
     source: "NIST SP 800-131A Rev.2"
 
+  # The same weak digest, observed as the signature over a certificate rather
+  # than as a hash. §7.3 records a certificate's signature algorithm with
+  # `primitive: signature` — a certificate is an authentication artefact — and
+  # §8 collapses `sha1WithRSAEncryption` to family SHA-1, so `hash-upgrade` above
+  # never saw it: a SHA-1-signed certificate was `broken_now` with no advice.
+  #
+  # Two entries, split by where it was found, because the work is different and
+  # the action class is the pack's estimate of that work. On a deployed or stored
+  # certificate nothing is compiled — the certificate is re-issued under a
+  # SHA-256 signature and redeployed, and the same is true of a digest named in a
+  # configuration file. At a signing call site in source it is an edit.
+  - id: sig-hash-upgrade-issued
+    match:
+      primitive: signature
+      family: [MD5, SHA-1]
+      source_layer: [live, artifact, config]
+    target: SHA-256
+    action_class: config
+    note: "Re-issue the certificate under a SHA-256 signature and redeploy it; no code changes. This row is about the digest alone — the subject key is a separate finding and carries its own target."
+    source: "NIST SP 800-131A Rev.2 §9 (SHA-1 disallowed for digital signature generation); NIST SP 800-107 Rev.1 §5.1 on collision resistance"
+
+  - id: sig-hash-upgrade-source
+    match:
+      primitive: signature
+      family: [MD5, SHA-1]
+      source_layer: [source]
+    target: SHA-256
+    action_class: code_change
+    note: "The digest is named at the signing call site, so changing it is a source edit rather than a re-issuance."
+    source: "NIST SP 800-131A Rev.2 §9 (SHA-1 disallowed for digital signature generation); NIST SP 800-107 Rev.1 §5.1 on collision resistance"
+
   - id: cipher-upgrade
     match: { primitive: cipher, family: [DES, 3DES, RC4] }
     target: AES-256-GCM
     action_class: code_change
     source: "NIST SP 800-131A Rev.2"
+
+  # ------------------------------------------------------------------------- #
+  # Findings whose use was never observed.
+  #
+  # RSA is the only family this happens to, and it happens by design:
+  # `algorithm_aliases.yaml` gives every other asymmetric spelling a default
+  # primitive — `ecdsa` signs, `x25519` establishes keys — and deliberately gives
+  # RSA none, because RSA genuinely does both and a name cannot say which. So a
+  # `KeyPairGenerator.getInstance("RSA")`, an `RSA_generate_key` symbol or a CBOM
+  # component with no `cryptoProperties` arrives here quantum_vulnerable, on
+  # `rsa-quantum-any-use`'s reasoning that Shor factors the modulus whatever the
+  # key is for, with no primitive for any entry above to match. Those rows were
+  # the bulk of the report's unknown advice.
+  #
+  # Two entries, tied on purpose. They agree on every one of §11's tie-breaks —
+  # same action class, same prerequisite, both standardised — so the advisor
+  # emits both and writes the tradeoff into `side_effects`. That is the honest
+  # output, and it is not the generic suggestion §11 forbids: the pack has a
+  # cited target for each use, and what is missing is one observation about which
+  # use this is. §12 already files these in the `verify` wave for that same
+  # reason, so the wave and the recommendation now say the same thing.
+  #
+  # Scoped to `source` and `artifact` because that is where an unstated primitive
+  # comes from — a call site, a symbol, a CBOM component. The network, config and
+  # certificate collectors all record the primitive they observed, so a live
+  # finding without one is a gap in a collector rather than a case for this rule;
+  # and answering it here would put a key-exchange target on a running service
+  # without `kex-to-mlkem`'s TLS 1.3 clause ever having been tested.
+  - id: rsa-unstated-use-kem
+    match:
+      primitive: unknown
+      family: [RSA]
+      source_layer: [source, artifact]
+    target: ML-KEM-768
+    hybrid: X25519MLKEM768
+    requires:
+      library: "openssl>=3.5"
+    action_class: library_upgrade
+    note: "The use was not observed. This is the route if the key establishes keys; rsa-unstated-use-sig is the route if it signs. Confirm which before scheduling either — one observation settles it."
+    source: "NIST FIPS 203"
+
+  - id: rsa-unstated-use-sig
+    match:
+      primitive: unknown
+      family: [RSA]
+      source_layer: [source, artifact]
+    target: ML-DSA-65
+    requires:
+      library: "openssl>=3.5"
+    action_class: library_upgrade
+    side_effects: "ML-DSA signatures ~2.4 KB vs ~64 B for ECDSA. Check cert chains and constrained devices."
+    note: "The use was not observed. This is the route if the key signs; rsa-unstated-use-kem is the route if it establishes keys. Confirm which before scheduling either — one observation settles it."
+    source: "NIST FIPS 204"

@@ -207,12 +207,106 @@ def test_rsa_key_exchange_recommends_ml_kem_and_rsa_signature_recommends_ml_dsa(
     assert sig.source_citation == "NIST FIPS 204"
 
 
-def test_an_unknown_primitive_matches_nothing(pure) -> None:
-    """RSA with no observed use is not key exchange and not a signature. No guess."""
+def test_an_unknown_primitive_on_a_service_matches_nothing(pure) -> None:
+    """RSA with no observed use is not key exchange and not a signature. No guess.
+
+    On a *probed service*, specifically. The prober records the primitive of
+    everything it negotiates, so a live finding without one is a gap in a
+    collector rather than a fact about the key — and answering it here would put
+    a key-exchange target on a service without `kex-to-mlkem`'s TLS 1.3 clause
+    ever having been tested. The inventory layers, where an unstated primitive is
+    ordinary, are the test below.
+    """
     advice = one(advise(finding("RSA", Primitive.UNKNOWN), Verdict.QUANTUM_VULNERABLE, pure))
 
     assert advice.status is RecommendationStatus.UNKNOWN
     assert advice.target is None
+
+
+def test_rsa_with_no_observed_use_in_source_emits_both_routes(pure) -> None:
+    """The pack's answer to the largest class of unknown advice in a real report.
+
+    `algorithm_aliases.yaml` gives every asymmetric spelling but RSA a default
+    primitive, because RSA genuinely does both jobs and a name cannot say which.
+    So `rsa.generate_private_key(...)` is quantum_vulnerable on
+    `rsa-quantum-any-use` and used to reach the report with no target at all.
+
+    Both routes are emitted rather than one guessed at: they agree on every
+    tie-break, so §11's last clause applies and the tradeoff goes in
+    `side_effects`. This is not the generic suggestion §11 forbids — the pack has
+    a cited target for each use, and what is missing is one observation about
+    which use this is, which is what §12 already files the finding in `verify`
+    for.
+    """
+    advice = advise(
+        finding(
+            "RSA",
+            Primitive.UNKNOWN,
+            source_layer=SourceLayer.SOURCE,
+            evidence_location="pyapp/app.py:64",
+            evidence_raw={"file": "pyapp/app.py"},
+        ),
+        Verdict.QUANTUM_VULNERABLE,
+        pure,
+        x=5,
+    )
+
+    assert {item.rule_id for item in advice} == {"rsa-unstated-use-kem", "rsa-unstated-use-sig"}
+    assert {item.target for item in advice} == {"ML-KEM-768", "ML-DSA-65"}
+    assert {item.source_citation for item in advice} == {"NIST FIPS 203", "NIST FIPS 204"}
+    # Nothing observed an OpenSSL, so both routes carry the same single chain:
+    # the fork is about the use, and the prerequisite is about the library.
+    assert all(item.status is RecommendationStatus.BLOCKED for item in advice)
+    assert all([p.unmet for p in item.prerequisites] == ["openssl>=3.5"] for item in advice)
+    assert all("was not observed" in item.side_effects for item in advice)
+
+
+def test_a_dsa_signature_gets_ml_dsa(pure) -> None:
+    """`dh-dsa-quantum` rules DSA vulnerable, so the target list has to cover it.
+
+    It did not, and the two halves of the pack disagreeing produced the worst
+    possible row: vulnerable, with nothing to do about it.
+    """
+    advice = one(
+        advise(
+            finding("DSA", Primitive.SIGNATURE, source_layer=SourceLayer.ARTIFACT),
+            Verdict.QUANTUM_VULNERABLE,
+            pure,
+            x=5,
+        )
+    )
+
+    assert advice.target == "ML-DSA-65" and advice.rule_id == "sig-to-mldsa"
+
+
+def test_a_sha1_signed_certificate_gets_the_digest_upgraded_not_a_pqc_signature(pack) -> None:
+    """The finding is `primitive: signature`, and what is broken is the hash.
+
+    §7.3 records a certificate's signature algorithm as a signature — a
+    certificate is an authentication artefact — and §8 collapses
+    `sha1WithRSAEncryption` to family SHA-1, so `hash-upgrade` never saw it.
+    Above the 10-year line `sig-longlived-root` did, and answered "adopt
+    SLH-DSA", which is a recommendation about the key rather than the digest that
+    is actually disallowed.
+    """
+    advice = one(
+        advise(
+            finding(
+                "SHA-1",
+                Primitive.SIGNATURE,
+                source_layer=SourceLayer.ARTIFACT,
+                evidence_location="certs/weak.crt",
+                evidence_raw={"observation": "certificate_signature_algorithm"},
+            ),
+            Verdict.BROKEN_NOW,
+            pack,
+            x=20,
+        )
+    )
+
+    assert advice.target == "SHA-256" and advice.rule_id == "sig-hash-upgrade-issued"
+    assert advice.action_class is ActionClass.CONFIG
+    assert "Re-issue the certificate" in advice.side_effects
 
 
 # --------------------------------------------------------------------------- #
@@ -916,16 +1010,21 @@ def test_the_demo_produces_recommended_and_unknown_rows(demo_scan, db_session) -
     exchanges get OpenSSH's own hybrid method, and the two legacy TLS
     declarations match no rule at all.
 
-    Nothing is `blocked` in a files-only scan of this tree any more, and that is
-    the point of the SSH entry: those three rows used to be held to
-    `kex-to-mlkem`'s TLS 1.3 clause on an `sshd_config` line, where no collector
-    could ever observe it. `blocked` is exercised against the live weak host
-    below, where the ceiling is a real observation of a real refusal.
+    The `blocked` rows are the four RSA key generations whose use nothing
+    observed — three call sites and the binary built from one of them. Each gets
+    both routes, and both are held to the same OpenSSL clause, which the binary
+    collector answers with the 1.1 it read out of `cbin/build/cryptodemo`. That
+    is a borrowed observation used in the direction §11 allows: it blocks a
+    target, it never confirms one.
+
+    No SSH row is blocked, and that is the point of the SSH entry: those three
+    used to be held to `kex-to-mlkem`'s TLS 1.3 clause on an `sshd_config` line,
+    where no collector could ever observe it. A *protocol* ceiling as a blocker
+    is exercised against the live weak host below, where the refusal is real.
     """
     counts = demo_scan["recommendation_counts"]
     assert set(counts) == {"recommended", "blocked", "no_path", "unknown"}
     assert counts["recommended"] > 0
-    assert counts["blocked"] == 0
     assert counts["unknown"] > 0
 
     rows = db_session.execute(
@@ -933,10 +1032,23 @@ def test_the_demo_produces_recommended_and_unknown_rows(demo_scan, db_session) -
         .join(Recommendation, Recommendation.finding_id == Finding.id)
         .where(Finding.scan_id == UUID(demo_scan["scan_id"]))
     ).all()
-    blocked = [rec for _, rec in rows if rec.status is RecommendationStatus.BLOCKED]
-    assert all(rec.prerequisites for rec in blocked)
+    blocked = [(f, rec) for f, rec in rows if rec.status is RecommendationStatus.BLOCKED]
+    assert all(rec.prerequisites for _, rec in blocked)
     assert all(
-        {"unmet", "observed"} <= set(item) for rec in blocked for item in rec.prerequisites
+        {"unmet", "observed"} <= set(item) for _, rec in blocked for item in rec.prerequisites
+    )
+    # Every blocked row is an RSA of unstated use, and both routes are emitted
+    # for each: the fork is about the use, the prerequisite is about the library.
+    assert {f.algorithm_family for f, _ in blocked} == {"RSA"}
+    assert all(f.primitive is Primitive.UNKNOWN for f, _ in blocked)
+    # Both routes for each of the four, at X=20's parameter sets.
+    assert len(blocked) == 8
+    assert {rec.target for _, rec in blocked} == {"ML-KEM-1024", "ML-DSA-87"}
+    assert {rec.source_citation for _, rec in blocked} == {"NIST FIPS 203", "NIST FIPS 204"}
+    assert all(
+        item["unmet"] == "openssl>=3.5" and item["observed"] == "openssl 1.1"
+        for _, rec in blocked
+        for item in rec.prerequisites
     )
     # Every recommendation on a migration item cites something.
     assert all(rec.source_citation for _, rec in rows)

@@ -35,10 +35,14 @@ def test_shipped_policy_pack_loads(shipped_policy_dir: Path) -> None:
     # closed demo/README.md's `unknown` table: DES, 3DES, RC4, the 64-bit block
     # ciphers, SHA-1 used as a hash, AES with no stated size, and ChaCha20.
     assert len(pack.algorithms) == 25
-    # Seven: §6's five, plus the two the layer scoping needed — OpenSSH's own
+    # Eleven: §6's five, plus the two the layer scoping needed — OpenSSH's own
     # key exchange, and the same ML-KEM target for a key exchange that was
-    # inventoried rather than observed on a service.
-    assert len(pack.pqc_targets) == 7
+    # inventoried rather than observed on a service — plus the four that closed
+    # the advice half of the same gap the algorithms list closed above: a weak
+    # digest observed as a certificate signature rather than as a hash (two, split
+    # by whether the fix is a re-issuance or an edit), and RSA whose use was never
+    # observed (two, one per use, emitted together).
+    assert len(pack.pqc_targets) == 11
     assert pack.prefer_hybrid is True
     # Both mapping files are populated now — the alias table in step 5, the named
     # groups in step 7. The loader only has to hand them over as mappings; what
