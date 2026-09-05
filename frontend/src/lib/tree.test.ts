@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
+
 import type { DirectoryNode } from "../api";
-import { countSelected, filePaths, selectAll, selectionState, toggleNode } from "./tree";
+import {
+  countSelected,
+  filePaths,
+  formatBytes,
+  selectAll,
+  selectionState,
+  toggleNode,
+} from "./tree";
 
 const file = (path: string) => ({
   type: "file" as const,
@@ -81,5 +89,16 @@ describe("file selection", () => {
     const next = toggleNode(new Set(), file("certs/weak.key"));
     expect([...next]).toEqual(["certs/weak.key"]);
     expect(toggleNode(next, file("certs/weak.key")).size).toBe(0);
+  });
+});
+
+describe("formatBytes", () => {
+  it("steps up to GB, which only the image archive reaches", () => {
+    // A `docker save` tar holds every layer uncompressed, and "1536.0 MB" is a
+    // number nobody reads as 1.5 GB.
+    expect(formatBytes(900)).toBe("900 B");
+    expect(formatBytes(2048)).toBe("2.0 KB");
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+    expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe("1.50 GB");
   });
 });

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, zStorageKey, type Policy, type ProbeTarget, type Scan, type ScanMode, type SourceType } from "../api";
 import { titleCase } from "../lib/labels";
+import { formatBytes } from "../lib/tree";
 
 // §13 screen 1. The data-lifetime dropdown is X in Mosca's inequality and the
 // Z slider is the arrival assumption; both are inputs a person supplies, and
@@ -32,6 +33,13 @@ const SKIPPED_DIRS = new Set([
   "build",
 ]);
 
+// What the archive picker will offer in its dialog. A `docker save` tar is
+// usually `.tar`; `.tar.gz` and `.tgz` are what a person gets after compressing
+// one to move it, and the backend reads either because `tarfile` sniffs the
+// compression. Advisory only — the picker's "all files" escape hatch stays, and
+// the archive is validated by being opened, not by its name.
+const ARCHIVE_ACCEPT = ".tar,.tar.gz,.tgz,application/x-tar,application/gzip";
+
 export interface PickedFolder {
   // the folder the user picked, which is the first segment of every path
   name: string;
@@ -41,10 +49,11 @@ export interface PickedFolder {
   skipped: number;
 }
 
-// An upload's `source_ref` is the upload id, which is a UUID and says nothing
-// to a person. Everything else names itself.
+// An upload's `source_ref` is the id the upload endpoint handed back, which is a
+// UUID and says nothing to a person. Everything else names itself.
 export function scanLabel(scan: Scan): string {
   if (scan.source_type === "upload") return "Uploaded folder";
+  if (scan.source_type === "docker_archive") return "Uploaded image archive";
   const probed = scan.probe_targets?.map((target) => `${target.host}:${target.port}`).join(", ");
   return scan.source_ref || probed || scan.id;
 }
@@ -83,6 +92,7 @@ export default function NewScan() {
   const [sourceType, setSourceType] = useState<SourceType>("upload");
   const [sourceRef, setSourceRef] = useState("");
   const [upload, setUpload] = useState<PickedFolder | null>(null);
+  const [archive, setArchive] = useState<File | null>(null);
   const [targets, setTargets] = useState("");
   const [lifetime, setLifetime] = useState(20);
   const [z, setZ] = useState<number | null>(null);
@@ -102,12 +112,22 @@ export default function NewScan() {
   const wantsFiles = mode !== "probe_only";
   const wantsProbe = mode !== "files";
   const wantsUpload = wantsFiles && sourceType === "upload";
+  // Both Docker source types end in the same merged filesystem; they differ in
+  // where the tar comes from. `docker_image` asks a daemon on the ECDAT host —
+  // which a host running only this API often does not have — and this one is
+  // the tar itself, saved wherever the image actually lives.
+  const wantsArchive = wantsFiles && sourceType === "docker_archive";
 
   function choose(chosen: FileList | null) {
     const all = Array.from(chosen ?? []);
     if (all.length === 0) return; // picker dismissed; keep the previous choice
     const files = pickable(all);
     setUpload({ name: folderName(all), files, skipped: all.length - files.length });
+  }
+
+  function chooseArchive(chosen: FileList | null) {
+    const picked = chosen?.[0];
+    if (picked) setArchive(picked); // dialog dismissed; keep the previous choice
   }
 
   async function submit(event: FormEvent) {
@@ -129,6 +149,15 @@ export default function NewScan() {
         setUploading(true);
         try {
           ref = (await api.uploadFolder(upload.files)).upload_id;
+        } finally {
+          setUploading(false);
+        }
+      }
+      if (wantsArchive) {
+        if (!archive) throw new Error("Choose a saved image archive to upload first.");
+        setUploading(true);
+        try {
+          ref = (await api.uploadImageArchive(archive)).archive_id;
         } finally {
           setUploading(false);
         }
@@ -188,7 +217,8 @@ export default function NewScan() {
               >
                 <option value="upload">Local folder</option>
                 <option value="github">Git repository</option>
-                <option value="docker_image">Docker image</option>
+                <option value="docker_image">Docker image (tag)</option>
+                <option value="docker_archive">Docker image (.tar)</option>
               </select>
             </div>
             <div className="sm:col-span-2">
@@ -229,6 +259,37 @@ export default function NewScan() {
                     you approve paths on the next screen.
                   </p>
                 </>
+              ) : wantsArchive ? (
+                <>
+                  <span className="label">Image archive</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="btn-secondary cursor-pointer">
+                      <input
+                        type="file"
+                        accept={ARCHIVE_ACCEPT}
+                        className="sr-only"
+                        onChange={(e) => chooseArchive(e.target.files)}
+                      />
+                      {archive ? "Choose a different archive…" : "Browse…"}
+                    </label>
+                    {archive && (
+                      <span className="truncate text-sm text-slate-700">
+                        <span className="mono">{archive.name}</span> &mdash;{" "}
+                        {formatBytes(archive.size)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Save the image where it lives &mdash;{" "}
+                    <code>docker save myimage:tag -o image.tar</code> &mdash; and upload the
+                    tar. No Docker daemon is needed on the ECDAT host, and nothing is pulled
+                    from a registry.
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    The layers are unpacked into the image&rsquo;s final filesystem and listed
+                    on the next screen. Nothing inside is read until you approve paths.
+                  </p>
+                </>
               ) : (
                 <>
                   <label className="label" htmlFor="source_ref">
@@ -246,6 +307,13 @@ export default function NewScan() {
                     }
                     required
                   />
+                  {sourceType === "docker_image" && (
+                    <p className="mt-1 text-xs text-slate-500">
+                      Saved with <code>docker save</code> from a daemon on the ECDAT host. If
+                      the image lives somewhere else, choose <em>Docker image (.tar)</em> and
+                      upload the saved archive instead.
+                    </p>
+                  )}
                 </>
               )}
             </div>

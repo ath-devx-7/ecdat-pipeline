@@ -6,6 +6,10 @@ exists in the test environment, so the subprocess is stood in for: what is
 asserted is the exact command that would run, what the collector does with its
 output, and that a failure reaches the user as a :class:`StagingError` with the
 tool's own last line rather than a stack trace.
+
+``docker_archive`` is the same unpacking over a tar the browser sent instead of
+one a daemon wrote, so its tests assert the opposite thing about the subprocess:
+that none runs at all.
 """
 
 from __future__ import annotations
@@ -15,12 +19,13 @@ import json
 import subprocess
 import tarfile
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from app.intake import stage as stage_module
 from app.intake.stage import StagingError, stage_source
+from app.intake.upload import archive_path
 from app.models.enums import SourceType
 
 
@@ -201,11 +206,12 @@ def test_a_docker_image_is_saved_and_its_layers_merged_in_manifest_order(
     assert not (work_root / f"{scan_id}.export").exists()
 
 
-def test_a_docker_save_without_a_manifest_is_reported(work_root, monkeypatch) -> None:
+def test_an_archive_with_neither_index_is_reported(work_root, monkeypatch) -> None:
+    """Layer order comes from a manifest.json or an index.json. With neither there is none."""
     runner = FakeRun(_docker_save_writing(_tar_bytes({"layer0/layer.tar": _tar_bytes({"a": b"x"})})))
     monkeypatch.setattr(stage_module.subprocess, "run", runner)
 
-    with pytest.raises(StagingError, match="no manifest.json"):
+    with pytest.raises(StagingError, match="neither a manifest.json nor an index.json"):
         stage_source(uuid4(), SourceType.DOCKER_IMAGE, "example/app:1.0")
 
 
@@ -215,7 +221,7 @@ def test_a_manifest_naming_a_missing_layer_is_reported(work_root, monkeypatch) -
     )
     monkeypatch.setattr(stage_module.subprocess, "run", FakeRun(_docker_save_writing(archive)))
 
-    with pytest.raises(StagingError, match="missing: gone/layer.tar"):
+    with pytest.raises(StagingError, match="does not contain: gone/layer.tar"):
         stage_source(uuid4(), SourceType.DOCKER_IMAGE, "example/app:1.0")
 
 
@@ -252,6 +258,154 @@ def test_a_failed_docker_save_cleans_up_its_scratch_space(work_root, monkeypatch
         stage_source(scan_id, SourceType.DOCKER_IMAGE, "example/missing:1.0")
 
     assert not (work_root / f"{scan_id}.export").exists()
+
+
+# --------------------------------------------------------------------------- #
+# docker_archive
+# --------------------------------------------------------------------------- #
+
+
+def _oci_archive(layers: list[dict[str, bytes | None]], *, nested_index: bool = False) -> bytes:
+    """An OCI image layout: index.json to a manifest blob to layer blobs.
+
+    ``nested_index`` inserts the extra hop a multi-architecture archive has, so
+    the walk that follows it is exercised on the shape that actually produces it.
+    """
+    entries: dict[str, bytes | None] = {"oci-layout": b'{"imageLayoutVersion": "1.0.0"}'}
+
+    layer_descriptors = []
+    for index, layer in enumerate(layers):
+        digest = f"sha256:{index:064x}"
+        entries[f"blobs/sha256/{digest.split(':')[1]}"] = _tar_bytes(layer)
+        layer_descriptors.append({"digest": digest, "size": 1})
+
+    manifest = json.dumps({"schemaVersion": 2, "layers": layer_descriptors}).encode()
+    manifest_digest = f"sha256:{'a' * 64}"
+    entries[f"blobs/sha256/{'a' * 64}"] = manifest
+
+    top: dict = {"schemaVersion": 2, "manifests": [{"digest": manifest_digest}]}
+    if nested_index:
+        inner = json.dumps(top).encode()
+        inner_digest = f"sha256:{'b' * 64}"
+        entries[f"blobs/sha256/{'b' * 64}"] = inner
+        top = {"schemaVersion": 2, "manifests": [{"digest": inner_digest}]}
+    entries["index.json"] = json.dumps(top).encode()
+    return _tar_bytes(entries)
+
+
+def _stored_archive(archive_bytes: bytes) -> str:
+    """Put ``archive_bytes`` where the upload endpoint would have. Returns the ref."""
+    archive_id = uuid4()
+    path = archive_path(archive_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(archive_bytes)
+    return str(archive_id)
+
+
+def test_an_uploaded_archive_merges_its_layers_without_running_anything(
+    work_root, fake_run
+) -> None:
+    """The same merged tree as ``docker_image``, and not one subprocess to get it."""
+    ref = _stored_archive(
+        _image_archive(
+            [
+                {"etc/": None, "etc/app.conf": b"v1", "bin/tool": b"tool"},
+                {"etc/app.conf": b"v2", "usr/lib/libcrypto.so.3": b"elf"},
+            ]
+        )
+    )
+    scan_id = uuid4()
+
+    staged = stage_source(scan_id, SourceType.DOCKER_ARCHIVE, ref)
+
+    assert staged.ephemeral is True
+    assert staged.source_type is SourceType.DOCKER_ARCHIVE
+    assert staged.work_dir == (work_root / str(scan_id)).resolve()
+    assert (staged.work_dir / "etc" / "app.conf").read_bytes() == b"v2"
+    assert (staged.work_dir / "bin" / "tool").read_bytes() == b"tool"
+    assert (staged.work_dir / "usr" / "lib" / "libcrypto.so.3").is_file()
+    # No daemon, no registry, no `docker save`: the tar was already here.
+    assert fake_run.calls == []
+    # The export scratch space is gone, and the uploaded tar is still where the
+    # upload endpoint put it — staging reads it, it does not consume it.
+    assert not (work_root / f"{scan_id}.export").exists()
+    assert archive_path(UUID(ref)).is_file()
+
+
+def test_an_uploaded_archive_skips_whiteouts_like_a_saved_image(work_root, fake_run) -> None:
+    ref = _stored_archive(
+        _image_archive(
+            [{"etc/secret.key": b"old"}, {"etc/.wh.secret.key": b"", "etc/app.conf": b"v1"}]
+        )
+    )
+
+    staged = stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, ref)
+
+    assert not (staged.work_dir / "etc" / ".wh.secret.key").exists()
+    assert (staged.work_dir / "etc" / "app.conf").is_file()
+
+
+def test_an_oci_layout_archive_is_unpacked_too(work_root, fake_run) -> None:
+    """`docker buildx --output type=oci` and `skopeo copy` write no manifest.json."""
+    ref = _stored_archive(
+        _oci_archive([{"etc/app.conf": b"v1"}, {"usr/lib/libssl.so.3": b"elf"}])
+    )
+
+    staged = stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, ref)
+
+    assert (staged.work_dir / "etc" / "app.conf").read_bytes() == b"v1"
+    assert (staged.work_dir / "usr" / "lib" / "libssl.so.3").is_file()
+    assert fake_run.calls == []
+
+
+def test_a_multi_architecture_oci_index_is_followed_to_a_manifest(work_root, fake_run) -> None:
+    """Its index points at another index; the first entry listed is the one taken."""
+    ref = _stored_archive(_oci_archive([{"etc/app.conf": b"v1"}], nested_index=True))
+
+    staged = stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, ref)
+
+    assert (staged.work_dir / "etc" / "app.conf").read_bytes() == b"v1"
+
+
+def test_an_archive_that_is_not_a_tar_is_reported_as_such(work_root, fake_run) -> None:
+    ref = _stored_archive(b"this is not a tar, it is a sentence")
+
+    with pytest.raises(StagingError, match="not a readable tar archive"):
+        stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, ref)
+
+
+def test_a_missing_archive_says_it_may_have_been_swept(work_root, fake_run, settings) -> None:
+    with pytest.raises(StagingError, match="was not found"):
+        stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, str(uuid4()))
+
+
+def test_an_image_tag_in_the_archive_source_type_is_refused_with_the_way_out(
+    work_root, fake_run
+) -> None:
+    """The two Docker source types take different refs, and the message says which."""
+    with pytest.raises(StagingError, match="is not an image archive id"):
+        stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, "registry/image:tag")
+    assert fake_run.calls == []
+
+
+def test_a_traversing_archive_ref_is_refused_before_any_path_is_built(
+    work_root, fake_run
+) -> None:
+    with pytest.raises(StagingError, match="is not an image archive id"):
+        stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, "../../../etc")
+
+
+def test_a_layer_escaping_the_work_dir_is_dropped_not_written(work_root, fake_run) -> None:
+    """The tar was built by someone else — this is the same guard the saved path has."""
+    ref = _stored_archive(
+        _image_archive([{"../escaped.txt": b"nope", "/abs.txt": b"nope", "kept.txt": b"yes"}])
+    )
+
+    staged = stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, ref)
+
+    assert (staged.work_dir / "kept.txt").read_bytes() == b"yes"
+    assert not (staged.work_dir.parent / "escaped.txt").exists()
+    assert sorted(item.name for item in staged.work_dir.iterdir()) == ["abs.txt", "kept.txt"]
 
 
 # --------------------------------------------------------------------------- #

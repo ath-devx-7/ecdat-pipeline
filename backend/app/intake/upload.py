@@ -18,6 +18,13 @@ the file side:
   source ``ephemeral``. :func:`sweep_uploads` makes that true for uploads nobody
   ever turned into a scan.
 
+The same module also stores the other thing a browser can hand us whole: a
+``docker save`` archive, written to ``work_root/archives/{archive_id}/image.tar``
+by :class:`ArchiveWriter`. It carries its own tree inside it rather than in a
+manifest beside it, so there is nothing to validate on the way in — the layer
+tars are attacker-shaped input and are treated as such where they are unpacked,
+in ``app/intake/stage.py``.
+
 Storing is not reading. Every byte here goes from the request to a file and is
 never parsed; the collectors still open nothing until the paths are approved
 (§4 step 5).
@@ -38,11 +45,26 @@ from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["StoredUpload", "UploadError", "UploadPart", "store_upload", "sweep_uploads", "uploads_root"]
+__all__ = [
+    "ArchiveWriter",
+    "StoredArchive",
+    "StoredUpload",
+    "UploadError",
+    "UploadPart",
+    "archive_path",
+    "archives_root",
+    "store_upload",
+    "sweep_uploads",
+    "uploads_root",
+]
 
 #: Bytes moved per read. Large enough that a big file is not a million calls,
 #: small enough that the cap is enforced long before the disk fills.
 _CHUNK_BYTES = 1024 * 1024
+
+#: Every archive is stored under this name, so nothing has to remember a
+#: client-supplied filename to find the bytes again.
+ARCHIVE_FILENAME = "image.tar"
 
 
 class UploadError(ValueError):
@@ -70,10 +92,36 @@ class StoredUpload:
     total_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class StoredArchive:
+    """A ``docker save`` tar on disk, waiting for a scan to name it."""
+
+    archive_id: uuid.UUID
+    path: Path
+    total_bytes: int
+
+
 def uploads_root(settings: Settings | None = None) -> Path:
     """The parent of every upload tree. One directory, so the sweep has one place to look."""
     settings = settings or get_settings()
     return (Path(settings.work_root) / "uploads").resolve()
+
+
+def archives_root(settings: Settings | None = None) -> Path:
+    """The parent of every uploaded image archive.
+
+    Beside the upload trees rather than among them: an archive directory holds
+    one tar and no tree, and a scan naming it as an ``upload`` would otherwise
+    surface ``image.tar`` as a file to approve — which it is not, it is the
+    container of the files to approve.
+    """
+    settings = settings or get_settings()
+    return (Path(settings.work_root) / "archives").resolve()
+
+
+def archive_path(archive_id: uuid.UUID, settings: Settings | None = None) -> Path:
+    """Where the archive with this id lives. Derived, never stored."""
+    return archives_root(settings) / str(archive_id) / ARCHIVE_FILENAME
 
 
 # --------------------------------------------------------------------------- #
@@ -230,7 +278,7 @@ def _copy_part(part: UploadPart, destination: Path, *, budget: int, cap: int) ->
             written += len(chunk)
             if written > budget:
                 raise UploadError(
-                    f"The upload exceeds the total size cap of {_megabytes(cap)}. Bytes are "
+                    f"The upload exceeds the total size cap of {_size_label(cap)}. Bytes are "
                     "copied onto this host before anything is read from them, so the cap is "
                     "a hard guard. Upload a narrower directory, or raise "
                     "ECDAT_MAX_UPLOAD_BYTES if this host can afford the space."
@@ -239,8 +287,80 @@ def _copy_part(part: UploadPart, destination: Path, *, budget: int, cap: int) ->
     return written
 
 
-def _megabytes(value: int) -> str:
+def _size_label(value: int) -> str:
+    """A cap as a person would say it. GB, because the archive cap reaches it."""
+    if value >= 1024 * 1024 * 1024:
+        return f"{value / (1024 * 1024 * 1024):.1f} GB"
     return f"{value / (1024 * 1024):.1f} MB"
+
+
+# --------------------------------------------------------------------------- #
+# Storing — image archives
+# --------------------------------------------------------------------------- #
+
+
+class ArchiveWriter:
+    """One image archive, streamed to disk chunk by chunk.
+
+    A tar is written rather than parsed, and it can be a gigabyte, so it is
+    never held in memory: the endpoint feeds it whatever the request body gives
+    it and this counts, caps and writes. Spelled as an object rather than a
+    function taking a stream because the source is an *async* iterator and this
+    module stays synchronous — the caller owns the loop, this owns the file.
+
+    Every failure path must reach :meth:`discard`, including the client hanging
+    up mid-body: a half-written archive is not a smaller image, it is a
+    truncated tar, and unpacking one would offer a file list missing whatever
+    came after the failure.
+    """
+
+    __slots__ = ("_handle", "_settings", "archive_id", "path", "written")
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings or get_settings()
+        self.archive_id = uuid.uuid4()
+        self.path = archive_path(self.archive_id, self._settings)
+        self.path.parent.mkdir(parents=True, exist_ok=False)
+        self.written = 0
+        self._handle = open(self.path, "wb")
+
+    def write(self, chunk: bytes) -> None:
+        """Append one chunk, refusing the moment it would pass the byte cap.
+
+        Enforced against bytes actually written rather than a declared
+        ``Content-Length``: the header is as client-supplied as the body is.
+        """
+        cap = self._settings.max_image_archive_bytes
+        if self.written + len(chunk) > cap:
+            raise UploadError(
+                f"The image archive exceeds the size cap of {_size_label(cap)}. The tar is "
+                "copied onto this host and then unpacked before anything is read from it, "
+                "so the cap is a hard guard. Save a smaller image, or raise "
+                "ECDAT_MAX_IMAGE_ARCHIVE_BYTES if this host can afford the space."
+            )
+        self._handle.write(chunk)
+        self.written += len(chunk)
+
+    def finish(self) -> StoredArchive:
+        """Close the file and describe what landed. Refuses an empty body."""
+        self._handle.close()
+        if self.written == 0:
+            raise UploadError(
+                "The image archive is empty. Send the output of "
+                "`docker save <image> -o image.tar` as the request body."
+            )
+        logger.info(
+            "image archive %s stored %d byte(s) at %s", self.archive_id, self.written, self.path
+        )
+        return StoredArchive(
+            archive_id=self.archive_id, path=self.path, total_bytes=self.written
+        )
+
+    def discard(self) -> None:
+        """Delete what was written. Called only when the upload did not complete."""
+        if not self._handle.closed:
+            self._handle.close()
+        shutil.rmtree(self.path.parent, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -249,20 +369,31 @@ def _megabytes(value: int) -> str:
 
 
 def sweep_uploads(settings: Settings | None = None) -> int:
-    """Delete upload trees older than the retention window. Returns the count.
+    """Delete upload trees and image archives older than the retention window.
 
-    An upload that was never turned into a scan has no row anywhere pointing at
-    it, so nothing else would ever remove it. Called at startup rather than on a
-    timer: this is a synchronous prototype with no scheduler, and a sweep that
-    runs whenever the process restarts is enough to keep abandoned trees from
-    accumulating for ever.
+    Returns the count over both. An upload that was never turned into a scan has
+    no row anywhere pointing at it, so nothing else would ever remove it — and an
+    image archive is the more expensive half of that, being one file of up to
+    ``max_image_archive_bytes``. Called at startup rather than on a timer: this
+    is a synchronous prototype with no scheduler, and a sweep that runs whenever
+    the process restarts is enough to keep abandoned bytes from accumulating for
+    ever.
     """
     settings = settings or get_settings()
-    root = uploads_root(settings)
+    cutoff = time.time() - settings.upload_retention_hours * 3600
+    return sum(
+        _sweep_root(root, cutoff, settings.upload_retention_hours, what)
+        for root, what in (
+            (uploads_root(settings), "upload tree"),
+            (archives_root(settings), "image archive"),
+        )
+    )
+
+
+def _sweep_root(root: Path, cutoff: float, retention_hours: int, what: str) -> int:
     if not root.is_dir():
         return 0
 
-    cutoff = time.time() - settings.upload_retention_hours * 3600
     removed = 0
     for child in root.iterdir():
         if not child.is_dir():
@@ -276,9 +407,6 @@ def sweep_uploads(settings: Settings | None = None) -> int:
         removed += 1
     if removed:
         logger.info(
-            "swept %d upload tree(s) older than %dh from %s",
-            removed,
-            settings.upload_retention_hours,
-            root,
+            "swept %d %s(s) older than %dh from %s", removed, what, retention_hours, root
         )
     return removed

@@ -19,6 +19,7 @@ from app.models.enums import CollectorName, ScanMode, ScanStatus, SourceType
 __all__ = [
     "ApproveRequest",
     "ApproveResponse",
+    "ArchiveUploadResponse",
     "CbomImportResponse",
     "CollectorRunSummary",
     "DirectoryNode",
@@ -64,7 +65,8 @@ class ScanCreate(BaseModel):
 
     mode: ScanMode
     source_type: SourceType = SourceType.NONE
-    #: path, repo URL or image tag
+    #: path, repo URL, image tag, upload id or image-archive id — one per
+    #: source_type, and the two ids are what /api/uploads returned
     source_ref: str | None = None
     probe_targets: list[ProbeTarget] = Field(default_factory=list)
     #: X in Mosca's inequality — how long this data must stay confidential (§12).
@@ -79,7 +81,7 @@ class ScanCreate(BaseModel):
             if self.source_type is SourceType.NONE:
                 raise ValueError(
                     f"mode '{self.mode.value}' needs a source_type of "
-                    "folder, upload, github or docker_image"
+                    "folder, upload, github, docker_image or docker_archive"
                 )
             if not (self.source_ref or "").strip():
                 raise ValueError(f"mode '{self.mode.value}' needs a source_ref")
@@ -115,6 +117,18 @@ class UploadResponse(BaseModel):
 
     upload_id: UUID
     file_count: int
+    total_bytes: int
+
+
+class ArchiveUploadResponse(BaseModel):
+    """``POST /api/uploads/image`` — what the tar became.
+
+    ``archive_id`` is the ``source_ref`` of the ``docker_archive`` scan that
+    follows. There is no file count to report: the archive is one file until
+    staging unpacks it, and what it holds is the next screen's question.
+    """
+
+    archive_id: UUID
     total_bytes: int
 
 

@@ -112,6 +112,7 @@ def test_enum_values_are_the_spec_strings() -> None:
         "folder",
         "github",
         "docker_image",
+        "docker_archive",
         "upload",
         "none",
     ]

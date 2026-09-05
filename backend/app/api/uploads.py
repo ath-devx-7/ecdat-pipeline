@@ -1,24 +1,32 @@
-"""``POST /api/uploads`` — a folder picked in the browser, stored on this host.
+"""``POST /api/uploads`` — bytes the browser hands us whole, stored on this host.
 
-The first half of a two-step flow. It exists so that ``POST /api/scans`` can stay
-a JSON body with ``extra="forbid"``: a multipart scan-creation endpoint would
-have to accept the whole ``ScanCreate`` shape as loose form fields and lose that.
-So the bytes land here, the response names them, and the scan is created after:
+Two endpoints of the same shape: ``""`` takes a folder the user picked, and
+``/image`` takes one ``docker save`` tar. Both are the first half of a two-step
+flow, which exists so that ``POST /api/scans`` can stay a JSON body with
+``extra="forbid"``: a multipart scan-creation endpoint would have to accept the
+whole ``ScanCreate`` shape as loose form fields and lose that. So the bytes land
+here, the response names them, and the scan is created after:
 
-    POST /api/uploads   (multipart)  →  {"upload_id": …, "file_count": …}
-    POST /api/scans     {"source_type": "upload", "source_ref": <upload_id>}
+    POST /api/uploads        (multipart)  →  {"upload_id": …, "file_count": …}
+    POST /api/scans          {"source_type": "upload", "source_ref": <upload_id>}
 
-The body is read through :meth:`Request.form` rather than declared as
+    POST /api/uploads/image  (tar bytes)  →  {"archive_id": …, "total_bytes": …}
+    POST /api/scans          {"source_type": "docker_archive", "source_ref": <archive_id>}
+
+The folder body is read through :meth:`Request.form` rather than declared as
 ``files: list[UploadFile] = File(...)``. The declarative form is nicer, but its
 limits are Starlette's defaults — 1000 parts and a 1 MB cap on non-file fields —
 and this endpoint has its own caps that are both larger and user-facing. A real
 folder passes 1000 files easily, and refusing it with "Maximum number of files is
 1000" would name a number that appears in no setting the operator can change.
 Reading the form ourselves lets ``ECDAT_MAX_FILES_PER_SCAN`` be the number that
-actually decides, and be the number in the message.
+actually decides, and be the number in the message. The archive body is not
+multipart at all — it is one file with no manifest beside it, so it streams
+straight from the request to disk.
 
-Storing is not reading (§4). This endpoint writes the tree and returns; not one
-byte of it is parsed until the user has seen the file list and approved paths.
+Storing is not reading (§4). These endpoints write the tree, or the tar, and
+return; not one byte of either is parsed until the user has seen the file list
+and approved paths.
 """
 
 from __future__ import annotations
@@ -33,8 +41,8 @@ from starlette.formparsers import MultiPartException
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings
-from app.intake.upload import UploadError, store_upload
-from app.schemas.scans import UploadResponse
+from app.intake.upload import ArchiveWriter, UploadError, store_upload
+from app.schemas.scans import ArchiveUploadResponse, UploadResponse
 
 logger = logging.getLogger(__name__)
 
@@ -186,3 +194,86 @@ def _parse_manifest(paths: str) -> list[str]:
             "The 'paths' field must be a JSON array of strings, one per file part.",
         )
     return manifest
+
+
+#: Bytes buffered before one write is handed to the threadpool. The body arrives
+#: in chunks far smaller than this, and an image tar is measured in gigabytes:
+#: without the buffer a single upload would be tens of thousands of hops off the
+#: event loop, and with it a few hundred.
+_ARCHIVE_FLUSH_BYTES = 4 * 1024 * 1024
+
+
+@router.post(
+    "/image",
+    response_model=ArchiveUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/x-tar": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary",
+                        "description": "The output of `docker save`, or an OCI image layout.",
+                    }
+                }
+            },
+        }
+    },
+)
+async def create_image_archive(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> ArchiveUploadResponse:
+    """Store one ``docker save`` tar and return the id a scan can name.
+
+    The body is the tar itself, not a multipart part: there is exactly one file
+    and no manifest to carry beside it, and a raw body streams to disk without
+    the parser holding a copy. Nothing here opens the archive — it is unpacked at
+    staging, by ``app/intake/stage.py``, and the files inside it are still only
+    read after the user has approved paths (§4 step 5).
+
+        POST /api/uploads/image  (tar bytes)  ->  {"archive_id": ...}
+        POST /api/scans          {"source_type": "docker_archive",
+                                  "source_ref": <archive_id>}
+    """
+    try:
+        writer = await run_in_threadpool(ArchiveWriter, settings)
+    except OSError as exc:
+        logger.warning("image archive could not be opened: %s", exc)
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"The image archive could not be written: {exc}"
+        ) from exc
+
+    try:
+        buffered = bytearray()
+        async for chunk in request.stream():
+            buffered += chunk
+            if len(buffered) >= _ARCHIVE_FLUSH_BYTES:
+                await run_in_threadpool(writer.write, bytes(buffered))
+                buffered.clear()
+        if buffered:
+            await run_in_threadpool(writer.write, bytes(buffered))
+        stored = await run_in_threadpool(writer.finish)
+    except UploadError as exc:
+        # A truncated tar is not a smaller image, it is an unreadable one, so
+        # nothing partial survives any of these three exits.
+        await run_in_threadpool(writer.discard)
+        logger.warning("image archive rejected: %s", exc)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except OSError as exc:
+        await run_in_threadpool(writer.discard)
+        logger.warning("image archive could not be written: %s", exc)
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"The image archive could not be written: {exc}"
+        ) from exc
+    except BaseException:
+        # Chiefly the client hanging up mid-body, which is the common way a
+        # gigabyte upload ends badly.
+        await run_in_threadpool(writer.discard)
+        raise
+
+    return ArchiveUploadResponse(
+        archive_id=stored.archive_id, total_bytes=stored.total_bytes
+    )

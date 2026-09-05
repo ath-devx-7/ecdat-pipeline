@@ -53,7 +53,7 @@ where harvest-now-decrypt-later applies.
 | Node 20+ and npm | dashboard |
 | PostgreSQL 16 | the real store; SQLite works for a local trial and for the tests |
 | Docker with Compose | the demo lab (live TLS targets, the compiled binary) — optional |
-| Git and Docker CLI on `PATH` | `github` and `docker_image` scan sources — optional |
+| Git and Docker CLI on `PATH` | `github` and `docker_image` scan sources — optional; `docker_archive` needs neither |
 | Pango, GObject, HarfBuzz | the PDF report — see [Troubleshooting](#troubleshooting) |
 
 Semgrep and pyelftools are ordinary pip dependencies and come with the requirements file.
@@ -195,7 +195,7 @@ curl -s localhost:8000/api/scans/$ID/cbom        -o ecdat-$ID.cdx.json
 curl -s localhost:8000/api/scans/$ID/report.pdf  -o ecdat-$ID.pdf
 ```
 
-Scan modes: `files` (a folder, a browser folder upload, a git URL or a Docker image tag),
+Scan modes: `files` (a folder, a browser folder upload, a git URL, a Docker image tag or an uploaded `docker save` tar),
 `probe_only` (host:port targets, no files, runs immediately with no approval step) and
 `files_and_probe` (both — the only mode in which drift detection has anything to compare).
 Data lifetime is X in Mosca's inequality: how long the data this system protects must stay
@@ -213,8 +213,20 @@ cap (`ECDAT_MAX_UPLOAD_BYTES`, 512 MB). The client-supplied path manifest is tre
 untrusted: an absolute path, a `..`, or anything that would resolve outside the upload
 directory is refused, and the partial tree is deleted rather than scanned. `github` sources
 are cloned with `--depth 1` under `ECDAT_WORK_ROOT/{scan_id}`; `docker_image` sources are
-`docker save`d and their layers merged in manifest order, whiteouts skipped. `.git` is pruned from the
-surface scan: packed objects are not deployed artefacts and would consume the file cap
+`docker save`d and their layers merged in manifest order, whiteouts skipped.
+
+`docker_archive` is that last one without the daemon: run `docker save myimage:tag -o
+image.tar` wherever the image actually lives, and upload the tar itself. The dashboard's
+*Docker image (.tar)* option posts it to `POST /api/uploads/image` — a raw body, not a
+multipart form, since it is one file — which streams it to
+`ECDAT_WORK_ROOT/archives/{archive_id}/image.tar` under its own size cap
+(`ECDAT_MAX_IMAGE_ARCHIVE_BYTES`, 4 GB) and returns the id the scan then names. Staging
+unpacks it exactly as `docker_image` does, so nothing downstream can tell the two apart;
+an OCI image layout (`docker buildx --output type=oci`, `skopeo copy`) is read too, since
+it has an `index.json` where a saved image has a `manifest.json`. Archives are swept on
+the same 24h clock as uploads, and every path inside a layer tar is treated as untrusted:
+absolute paths, `..` and every link type are dropped rather than repaired. `.git` is pruned
+from the surface scan: packed objects are not deployed artefacts and would consume the file cap
 before a single source file reached the approval screen.
 
 ## How it works
@@ -395,9 +407,10 @@ All settings are environment variables prefixed `ECDAT_`, or lines in `backend/.
 | `ECDAT_SCAN_TIMEOUT_SECONDS` | `600` | Per-scan budget. |
 | `ECDAT_MAX_PROBE_TARGETS` | `20` | Probe targets per scan. |
 | `ECDAT_PROBE_TIMEOUT_SECONDS` | `10` | Network timeout per target handed to sslyze. |
-| `ECDAT_WORK_ROOT` | `/tmp/ecdat` | Where cloned repos, unpacked images and browser uploads land. |
+| `ECDAT_WORK_ROOT` | `/tmp/ecdat` | Where cloned repos, unpacked images, browser uploads and uploaded image archives land. |
 | `ECDAT_MAX_UPLOAD_BYTES` | `536870912` | Total bytes one browser folder upload may carry. The file cap above applies to it too. |
-| `ECDAT_UPLOAD_RETENTION_HOURS` | `24` | How long an upload nobody turned into a scan survives. Swept at startup. |
+| `ECDAT_MAX_IMAGE_ARCHIVE_BYTES` | `4294967296` | Bytes one uploaded `docker save` tar may carry. Separate from the folder cap: a saved image holds every layer uncompressed. |
+| `ECDAT_UPLOAD_RETENTION_HOURS` | `24` | How long an upload or image archive nobody turned into a scan survives. Swept at startup. |
 | `ECDAT_GIT_CLONE_TIMEOUT_SECONDS` | `300` | |
 | `ECDAT_DOCKER_SAVE_TIMEOUT_SECONDS` | `600` | |
 | `ECDAT_SEMGREP_RULES_PATH` | `backend/semgrep_rules/crypto.yaml` | The only rule set Semgrep is given. |

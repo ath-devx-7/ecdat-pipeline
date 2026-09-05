@@ -69,6 +69,24 @@ describe("scanLabel", () => {
     expect(scanLabel(uploaded)).toBe("Uploaded folder");
   });
 
+  it("says the same of an uploaded image archive, whose ref is also an id", () => {
+    const archive = scan({
+      source_type: "docker_archive",
+      source_ref: "0b0f7f2e-0000-4000-8000-000000000001",
+    });
+
+    // Not "Docker image": the tag it was saved from is not something the tar
+    // carries anywhere the scans row can see, and inventing one would name an
+    // image nobody typed.
+    expect(scanLabel(archive)).toBe("Uploaded image archive");
+  });
+
+  it("still shows the tag when the daemon was asked for the image", () => {
+    expect(scanLabel(scan({ source_type: "docker_image", source_ref: "registry/app:1.0" }))).toBe(
+      "registry/app:1.0",
+    );
+  });
+
   it("leaves every other source naming itself", () => {
     expect(scanLabel(scan({ source_ref: "/srv/app" }))).toBe("/srv/app");
     expect(scanLabel(scan({ source_type: "none", probe_targets: [{ host: "localhost", port: 8443 }] }))).toBe(

@@ -40,9 +40,16 @@ class Settings(BaseSettings):
     #: because 5000 files is a very different amount of disk depending on what
     #: they are.
     max_upload_bytes: int = 512 * 1024 * 1024
-    #: How long an upload tree nobody turned into a scan survives. Swept at
-    #: startup: an upload is copied bytes we own, so leaving abandoned ones on
-    #: disk for ever would quietly make `ephemeral` a lie.
+    #: Bytes one uploaded image archive may carry. Separate from, and far
+    #: larger than, the folder cap above: a `docker save` tar holds every layer
+    #: uncompressed, so a base image alone runs to a gigabyte, and the file-count
+    #: cap says nothing about it because the archive is a single file until it is
+    #: unpacked. The unpacked tree is then subject to the file cap like any
+    #: other source.
+    max_image_archive_bytes: int = 4 * 1024 * 1024 * 1024
+    #: How long an upload tree or an image archive nobody turned into a scan
+    #: survives. Swept at startup: both are copied bytes we own, so leaving
+    #: abandoned ones on disk for ever would quietly make `ephemeral` a lie.
     upload_retention_hours: int = 24
 
     # Staging subprocess budgets. Cloning and `docker save` are the only two

@@ -138,8 +138,8 @@ Seven tables. Findings and assets are observations; algorithms and pqc_targets a
 |---|---|---|
 | id | uuid PK | |
 | mode | enum | probe_only \| files \| files_and_probe |
-| source_type | enum | folder \| upload \| github \| docker_image \| none — `folder` is read in place, `upload` is a tree the browser copied in and that we may delete |
-| source_ref | text | path, repo URL, or image tag |
+| source_type | enum | folder \| upload \| github \| docker_image \| docker_archive \| none — `folder` is read in place, `upload` is a tree the browser copied in and that we may delete, `docker_archive` is a `docker save` tar it copied in and that we unpack |
+| source_ref | text | path, repo URL, image tag, or the id `/api/uploads` returned for an uploaded tree or archive |
 | probe_targets | jsonb | list of `{host, port}` |
 | data_lifetime_years | int | X in Mosca — from intake form |
 | policy_version | text | stamped from loaded YAML |

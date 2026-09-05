@@ -2,7 +2,13 @@
 // Everything goes through the same-origin `/api` prefix — see vite.config.ts.
 
 export type ScanMode = "probe_only" | "files" | "files_and_probe";
-export type SourceType = "folder" | "github" | "docker_image" | "upload" | "none";
+export type SourceType =
+  | "folder"
+  | "github"
+  | "docker_image"
+  | "docker_archive"
+  | "upload"
+  | "none";
 export type ScanStatus =
   | "staging"
   | "awaiting_approval"
@@ -284,6 +290,14 @@ export interface UploadResponse {
   total_bytes: number;
 }
 
+// POST /api/uploads/image. `archive_id` is the `source_ref` of the
+// `docker_archive` scan that follows. No file count: the tar is one file until
+// staging unpacks it, and what it holds is the next screen's question.
+export interface ImageArchiveResponse {
+  archive_id: string;
+  total_bytes: number;
+}
+
 export interface CbomImportResponse {
   scan_id: string;
   status: ScanStatus;
@@ -350,6 +364,15 @@ export const api = {
     for (const file of files) form.append("files", file, file.name);
     return request<UploadResponse>("/api/uploads", { method: "POST", body: form });
   },
+  // The same two-step flow for a `docker save` tar, which needs neither a
+  // manifest nor multipart: it is one file, so it is the body itself and the
+  // browser streams it.
+  uploadImageArchive: (file: File) =>
+    request<ImageArchiveResponse>("/api/uploads/image", {
+      method: "POST",
+      headers: { "content-type": "application/x-tar" },
+      body: file,
+    }),
   files: (id: string) => request<FileTree>(`/api/scans/${id}/files`),
   approve: (id: string, paths: string[]) =>
     request<ApproveResponse>(`/api/scans/${id}/approve`, json({ paths })),

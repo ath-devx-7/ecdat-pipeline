@@ -18,11 +18,19 @@ class SourceType(str, enum.Enum):
     who put it there: a folder is read in place at a path the user typed, an
     upload is a tree the browser copied in and that we therefore own and may
     delete. Downstream of staging the two are indistinguishable.
+
+    ``DOCKER_IMAGE`` and ``DOCKER_ARCHIVE`` are the same distinction one level
+    up: both end as an image's merged filesystem, and differ in where the tar
+    came from. An image is pulled out of a local daemon with ``docker save``, so
+    it needs one; an archive is a ``docker save`` tar the browser sent us, so it
+    needs nothing but the bytes. Downstream of staging the two are
+    indistinguishable.
     """
 
     FOLDER = "folder"
     GITHUB = "github"
     DOCKER_IMAGE = "docker_image"
+    DOCKER_ARCHIVE = "docker_archive"
     UPLOAD = "upload"
     NONE = "none"
 
