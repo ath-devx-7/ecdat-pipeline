@@ -81,7 +81,9 @@ describe("scanLabel", () => {
     expect(scanLabel(archive)).toBe("Uploaded image archive");
   });
 
-  it("still shows the tag when the daemon was asked for the image", () => {
+  it("shows the tag of a docker_image scan, which only the API can create", () => {
+    // The screen offers the uploaded tar and nothing else, but the source type
+    // is still in the API and the recent-scans list has to name one.
     expect(scanLabel(scan({ source_type: "docker_image", source_ref: "registry/app:1.0" }))).toBe(
       "registry/app:1.0",
     );

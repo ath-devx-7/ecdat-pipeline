@@ -213,12 +213,16 @@ cap (`ECDAT_MAX_UPLOAD_BYTES`, 512 MB). The client-supplied path manifest is tre
 untrusted: an absolute path, a `..`, or anything that would resolve outside the upload
 directory is refused, and the partial tree is deleted rather than scanned. `github` sources
 are cloned with `--depth 1` under `ECDAT_WORK_ROOT/{scan_id}`; `docker_image` sources are
-`docker save`d and their layers merged in manifest order, whiteouts skipped.
+`docker save`d on the ECDAT host and their layers merged in manifest order, whiteouts
+skipped. That last one is an API path too, for the same reason `folder` is: it needs a
+daemon holding the image on *this* host, which a browser cannot know about, so the
+dashboard does not offer it.
 
-`docker_archive` is that last one without the daemon: run `docker save myimage:tag -o
-image.tar` wherever the image actually lives, and upload the tar itself. The dashboard's
-*Docker image (.tar)* option posts it to `POST /api/uploads/image` — a raw body, not a
-multipart form, since it is one file — which streams it to
+`docker_archive` is that same unpacking without the daemon, and it is what the dashboard's
+*Docker image* option does: run `docker save myimage:tag -o image.tar` wherever the image
+actually lives, and upload the tar itself. The browser posts it to
+`POST /api/uploads/image` — a raw body, not a multipart form, since it is one file — which
+streams it to
 `ECDAT_WORK_ROOT/archives/{archive_id}/image.tar` under its own size cap
 (`ECDAT_MAX_IMAGE_ARCHIVE_BYTES`, 4 GB) and returns the id the scan then names. Staging
 unpacks it exactly as `docker_image` does, so nothing downstream can tell the two apart;

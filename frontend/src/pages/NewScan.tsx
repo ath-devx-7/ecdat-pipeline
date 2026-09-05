@@ -112,10 +112,11 @@ export default function NewScan() {
   const wantsFiles = mode !== "probe_only";
   const wantsProbe = mode !== "files";
   const wantsUpload = wantsFiles && sourceType === "upload";
-  // Both Docker source types end in the same merged filesystem; they differ in
-  // where the tar comes from. `docker_image` asks a daemon on the ECDAT host —
-  // which a host running only this API often does not have — and this one is
-  // the tar itself, saved wherever the image actually lives.
+  // "Docker image" on this screen is always the uploaded tar. The API's
+  // `docker_image` type still exists and still shells out to `docker save`, but
+  // that needs a daemon holding the image on the *ECDAT host*, which a browser
+  // cannot know about and a host running only this API often does not have —
+  // the same reason "Local folder" is `upload` rather than `folder`.
   const wantsArchive = wantsFiles && sourceType === "docker_archive";
 
   function choose(chosen: FileList | null) {
@@ -217,8 +218,7 @@ export default function NewScan() {
               >
                 <option value="upload">Local folder</option>
                 <option value="github">Git repository</option>
-                <option value="docker_image">Docker image (tag)</option>
-                <option value="docker_archive">Docker image (.tar)</option>
+                <option value="docker_archive">Docker image</option>
               </select>
             </div>
             <div className="sm:col-span-2">
@@ -282,8 +282,8 @@ export default function NewScan() {
                   <p className="mt-1 text-xs text-slate-500">
                     Save the image where it lives &mdash;{" "}
                     <code>docker save myimage:tag -o image.tar</code> &mdash; and upload the
-                    tar. No Docker daemon is needed on the ECDAT host, and nothing is pulled
-                    from a registry.
+                    tar. No Docker daemon is needed on this host, and nothing is pulled from a
+                    registry.
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     The layers are unpacked into the image&rsquo;s final filesystem and listed
@@ -293,27 +293,16 @@ export default function NewScan() {
               ) : (
                 <>
                   <label className="label" htmlFor="source_ref">
-                    {sourceType === "github" ? "Clone URL" : "Image tag"}
+                    Clone URL
                   </label>
                   <input
                     id="source_ref"
                     className="input"
                     value={sourceRef}
                     onChange={(e) => setSourceRef(e.target.value)}
-                    placeholder={
-                      sourceType === "github"
-                        ? "https://github.com/org/repo.git"
-                        : "registry/image:tag"
-                    }
+                    placeholder="https://github.com/org/repo.git"
                     required
                   />
-                  {sourceType === "docker_image" && (
-                    <p className="mt-1 text-xs text-slate-500">
-                      Saved with <code>docker save</code> from a daemon on the ECDAT host. If
-                      the image lives somewhere else, choose <em>Docker image (.tar)</em> and
-                      upload the saved archive instead.
-                    </p>
-                  )}
                 </>
               )}
             </div>
