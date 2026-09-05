@@ -22,8 +22,8 @@ export default function Layout() {
     <div className="min-h-screen">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3">
-          <Link to="/" className="text-lg font-bold tracking-tight">
-            ECDAT
+          <Link to="/" className="whitespace-nowrap text-lg font-bold tracking-tight">
+            Quantum Lens
           </Link>
           <span className="text-xs text-slate-500">
             Enterprise Cryptographic Discovery &amp; Analysis Tool
