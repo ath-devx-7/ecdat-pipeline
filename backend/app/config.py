@@ -78,10 +78,35 @@ class Settings(BaseSettings):
     #: percentage still counts them. See app/core/visibility.py.
     hide_quantum_safe: bool = True
 
-    #: Directory names pruned during the surface scan. `.git` holds packed
-    #: objects that are not deployed artefacts and would consume the file cap
-    #: before a single source file were offered for approval.
-    surface_exclude_dirs: tuple[str, ...] = (".git",)
+    #: Directory names pruned during the surface scan, at any depth. `.git`
+    #: holds packed objects; the rest are vendored trees and caches. None is a
+    #: deployed artefact, and every one would consume the file cap before a
+    #: single source file were offered for approval.
+    #:
+    #: These are the names the browser also drops before it uploads a folder
+    #: (`SKIPPED_DIRS` in frontend/src/pages/NewScan.tsx) — *minus* `dist` and
+    #: `build`, and the difference is deliberate. There the input is a source
+    #: tree the user picked, where build output is scratch worth neither the
+    #: upload nor the file cap. Here the input can be an unpacked image, where
+    #: `/dist` and `/build` are where the deployed binary was COPYed to. The
+    #: repo proves it: the demo's compiled ELF is `demo/cbin/build/cryptodemo`,
+    #: and pruning it by name leaves the binary collector with nothing to read.
+    #: A vendored tree is never the artefact; build output frequently is.
+    #:
+    #: This is also the only place an *image's* `node_modules` can be pruned:
+    #: a `docker save` tar is one opaque file until staging unpacks it, so no
+    #: client-side pass can filter it the way a picked folder is filtered.
+    #:
+    #: Set `ECDAT_SURFACE_EXCLUDE_DIRS='[".git"]'` to get the vendored trees
+    #: back: excluding them hides whatever crypto they ship, which is a real
+    #: loss on a source tree that pins its dependencies in-repo.
+    surface_exclude_dirs: tuple[str, ...] = (
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+    )
 
 
 @lru_cache(maxsize=1)

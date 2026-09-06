@@ -25,6 +25,7 @@ import pytest
 
 from app.intake import stage as stage_module
 from app.intake.stage import StagingError, stage_source
+from app.intake.surface import walk_surface
 from app.intake.upload import archive_path
 from app.models.enums import SourceType
 
@@ -343,6 +344,70 @@ def test_an_uploaded_archive_skips_whiteouts_like_a_saved_image(work_root, fake_
 
     assert not (staged.work_dir / "etc" / ".wh.secret.key").exists()
     assert (staged.work_dir / "etc" / "app.conf").is_file()
+
+
+def test_an_unpacked_image_drops_vendored_trees_and_keeps_build_output(
+    work_root, fake_run, settings
+) -> None:
+    """What an image's approval list leaves out, and what it must not.
+
+    A picked folder is filtered in the browser; a tar cannot be, being one
+    opaque file until staging unpacks it. So the surface scan's defaults are the
+    only thing standing between an image's ``node_modules`` and the file cap.
+    They stop there: ``app/dist/server`` is the deployed binary, and an image
+    whose artefact went unlisted would be scanned for crypto without ever
+    reading the thing that ships it.
+    """
+    ref = _stored_archive(
+        _image_archive(
+            [
+                {
+                    "app/server.js": b"tls",
+                    "app/node_modules/left-pad/index.js": b"//",
+                    "app/__pycache__/server.cpython-313.pyc": b"\x00",
+                    "app/dist/server": b"\x7fELF",
+                    "etc/nginx/nginx.conf": b"ssl_protocols TLSv1.2;",
+                }
+            ]
+        )
+    )
+
+    staged = stage_source(uuid4(), SourceType.DOCKER_ARCHIVE, ref)
+    files = walk_surface(
+        staged.work_dir, max_files=5000, exclude_dirs=settings.surface_exclude_dirs
+    )
+
+    # Walk order: a directory's own files, then its subdirectories.
+    assert [item.path for item in files] == [
+        "app/server.js",
+        "app/dist/server",
+        "etc/nginx/nginx.conf",
+    ]
+    # Pruned from the listing, not from the disk: staging owes the collectors a
+    # faithful copy of the image, and what is offered for approval is a view of it.
+    assert (staged.work_dir / "app" / "node_modules" / "left-pad" / "index.js").is_file()
+
+
+def test_the_default_exclusions_are_the_vendored_trees_and_not_build_output() -> None:
+    """The browser's filter minus `dist` and `build` — see NewScan.tsx.
+
+    Pinned because the halves live in different languages and the difference
+    between them is easy to mistake for drift. A vendored tree is never the
+    deployed artefact, so it is dropped everywhere. Build output frequently
+    *is* the artefact once it is inside an image, and pruning it by name would
+    leave the binary collector with nothing to read — which is not a
+    hypothetical: this repo's own demo binary is `demo/cbin/build/cryptodemo`.
+    """
+    from app.config import Settings
+
+    assert set(Settings().surface_exclude_dirs) == {
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+    }
+    assert not {"dist", "build"} & set(Settings().surface_exclude_dirs)
 
 
 def test_an_oci_layout_archive_is_unpacked_too(work_root, fake_run) -> None:

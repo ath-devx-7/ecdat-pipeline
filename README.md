@@ -422,7 +422,7 @@ All settings are environment variables prefixed `ECDAT_`, or lines in `backend/.
 | `ECDAT_SEMGREP_EXECUTABLE` | *(the one beside the interpreter, then `PATH`)* | Override. |
 | `ECDAT_WEASYPRINT_DLL_DIRECTORIES` | *(unset)* | Directory holding Pango/GObject DLLs when they are not on the loader path. |
 | `ECDAT_HIDE_QUANTUM_SAFE` | `true` | Keep `quantum_safe` findings in the store but out of the findings table, roadmap, CycloneDX export and report. The readiness percentage still counts them. |
-| `ECDAT_SURFACE_EXCLUDE_DIRS` | `[".git"]` | Directory names pruned from the surface scan, as a JSON list — e.g. `'[".git", "node_modules", ".venv"]'`. Excluding vendored dependencies hides any crypto they ship, so it is a choice, not the default. |
+| `ECDAT_SURFACE_EXCLUDE_DIRS` | `[".git", "node_modules", "__pycache__", ".venv", "venv"]` | Directory names pruned from the surface scan, at any depth, as a JSON list. The vendored trees the browser also drops before it uploads a folder, applied here so an *image* gets the same treatment — a tar cannot be filtered client-side. `dist` and `build` are deliberately **not** here: the browser drops them from a picked source tree, but inside an image they are usually where the deployed binary lives. Excluding vendored trees hides whatever crypto they ship, so set `'[".git"]'` to scan them. |
 
 ## Testing
 
@@ -518,10 +518,16 @@ queue touches no collector code.
   `mingw-w64-ucrt-x86_64-pango`, then `ECDAT_WEASYPRINT_DLL_DIRECTORIES` pointing at the
   `bin` directory holding the DLLs. `report.html` serves the report meanwhile.
 - **A small repository is rejected for exceeding the 5000-file cap** — it almost always
-  commits `node_modules`, a virtualenv or a build directory; the error names the heaviest
-  directories. Exclude them with `ECDAT_SURFACE_EXCLUDE_DIRS` (knowing that vendored
-  dependencies then go unscanned), scan a narrower path, or raise
-  `ECDAT_MAX_FILES_PER_SCAN`.
+  commits `node_modules`, a virtualenv or a build directory. The vendored trees are pruned
+  by default and build output is not (it may be the deployed artefact); the error names the
+  heaviest directories that remain. Add them to `ECDAT_SURFACE_EXCLUDE_DIRS`, scan a
+  narrower path, or raise `ECDAT_MAX_FILES_PER_SCAN`.
+- **An image is rejected for exceeding the file cap with `usr` as the heaviest directory**
+  — a `docker save` tar unpacks to the whole root filesystem, so a distro base alone can
+  pass 5000 files before any of your application is counted. The vendored-tree exclusions
+  above will not help: nothing in `/usr/lib` is vendored, it is the image. Either raise
+  `ECDAT_MAX_FILES_PER_SCAN`, or scan an image built `FROM scratch` or a distroless base.
+  Per-directory scoping of an image is a roadmap item.
 - **The lab's image builds fail with `dial tcp 192.0.2.1:443`** — a DNS resolver is
   blackholing the registry; `demo/README.md` explains the check.
 - **The drift test skips** — it needs both `localhost:8443` and `8444` reachable; bring the

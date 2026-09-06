@@ -19,19 +19,21 @@ const LIFETIMES: { label: string; years: number }[] = [
 // props type of the whole element.
 const DIRECTORY_PICKER: Record<string, string> = { webkitdirectory: "", directory: "" };
 
-// Dropped before anything is sent. These are build output and vendored trees:
-// they are not deployed artefacts, and they would consume the per-scan file cap
-// before a single source file reached the approval screen. Here it also costs
-// upload time, because every one of them would go over the wire first.
-const SKIPPED_DIRS = new Set([
-  ".git",
-  "node_modules",
-  "__pycache__",
-  ".venv",
-  "venv",
-  "dist",
-  "build",
-]);
+// Vendored trees and caches. Never a deployed artefact, in a source tree or in
+// an image, so they are dropped everywhere: here before the upload, and again on
+// the host by `surface_exclude_dirs` (backend/app/config.py), which is what an
+// image archive goes through — a tar cannot be filtered client-side. Keep this
+// list and that one in step.
+const VENDORED_DIRS = [".git", "node_modules", "__pycache__", ".venv", "venv"];
+
+// Build output, dropped from a picked folder only. In a source tree it is
+// scratch, and it would cost upload time and the file cap before a single
+// source file reached the approval screen. In an *image* the same names are
+// often where the deployed binary was COPYed to, so the backend does not prune
+// them — see the note on `surface_exclude_dirs`.
+const BUILD_OUTPUT_DIRS = ["dist", "build"];
+
+const SKIPPED_DIRS = new Set([...VENDORED_DIRS, ...BUILD_OUTPUT_DIRS]);
 
 // What the archive picker will offer in its dialog. A `docker save` tar is
 // usually `.tar`; `.tar.gz` and `.tgz` are what a person gets after compressing
@@ -288,6 +290,13 @@ export default function NewScan() {
                   <p className="mt-1 text-xs text-slate-500">
                     The layers are unpacked into the image&rsquo;s final filesystem and listed
                     on the next screen. Nothing inside is read until you approve paths.
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Left behind, as for a folder: {VENDORED_DIRS.join(", ")}. A tar cannot be
+                    filtered in the browser, so these are dropped on the host when the unpacked
+                    image is listed. Build output is kept here, unlike for a folder &mdash; in
+                    an image <code>dist</code> and <code>build</code> are often where the
+                    deployed binary lives.
                   </p>
                 </>
               ) : (
