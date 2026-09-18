@@ -23,7 +23,7 @@ export default function Layout() {
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3">
           <Link to="/" className="whitespace-nowrap text-lg font-bold tracking-tight">
-            Quantum Lens
+            Q-Crypto
           </Link>
           <span className="text-xs text-slate-500">
             Enterprise Cryptographic Discovery &amp; Analysis Tool
