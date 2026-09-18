@@ -69,7 +69,10 @@ class ScanCreate(BaseModel):
     #: source_type, and the two ids are what /api/uploads returned
     source_ref: str | None = None
     probe_targets: list[ProbeTarget] = Field(default_factory=list)
-    #: X in Mosca's inequality — how long this data must stay confidential (§12).
+    #: X in Mosca's inequality (§12). A file scan leaves this unset and supplies
+    #: it on the approval screen, where the user is looking at the tree and can
+    #: give one file a different lifetime from the rest. A ``probe_only`` scan
+    #: has no approval screen, so it is the only mode that sets X here.
     data_lifetime_years: int | None = Field(default=None, ge=0, le=100)
 
     @model_validator(mode="after")
@@ -218,6 +221,10 @@ class FileNode(BaseModel):
     path: str
     size_bytes: int | None
     approved: bool
+    #: This file's own X, or ``None`` for "scored at the scan-wide value". Sent
+    #: back so a re-opened tree shows the lifetimes that were actually stored
+    #: rather than resetting every row to the default.
+    data_lifetime_years: int | None = None
 
 
 class DirectoryNode(BaseModel):
@@ -241,11 +248,26 @@ class FileTreeResponse(BaseModel):
 
 
 class ApproveRequest(BaseModel):
-    """``POST /api/scans/{id}/approve``. Paths exactly as the tree returned them."""
+    """``POST /api/scans/{id}/approve``. Paths exactly as the tree returned them.
+
+    X arrives with the approval rather than at intake (§12). This is the screen
+    where the user is already reading their own file tree, so it is the only
+    screen where "these two files do not have the same confidentiality horizon"
+    is a judgement they can actually make — and the scan is scored immediately
+    after, so there is no window where the number is stored but unused.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     paths: list[str] = Field(default_factory=list)
+    #: The scan-wide X, and the fallback for every file with no entry below.
+    data_lifetime_years: int | None = Field(default=None, ge=0, le=100)
+    #: ``{path: years}`` for files the user gave their own lifetime. Only the
+    #: overrides are sent: an unlisted file is not "0 years", it is "whatever
+    #: the scan says", and those are different claims about the data.
+    file_lifetimes: dict[str, Annotated[int, Field(ge=0, le=100)]] = Field(
+        default_factory=dict
+    )
 
 
 class ApproveResponse(BaseModel):
@@ -337,6 +359,7 @@ def build_tree(rows) -> DirectoryNode:
                 path=row.path,
                 size_bytes=row.size_bytes,
                 approved=row.approved,
+                data_lifetime_years=getattr(row, "data_lifetime_years", None),
             )
         )
         # Roll the file up through every ancestor so a directory row can show

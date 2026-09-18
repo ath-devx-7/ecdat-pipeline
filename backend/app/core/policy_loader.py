@@ -29,6 +29,7 @@ from typing import Any, Mapping
 import yaml
 
 from app.config import get_settings
+from app.models.enums import ActionClass
 
 __all__ = [
     "AlgorithmRule",
@@ -106,6 +107,29 @@ class PolicyVersion:
     z_years_default: int
     y_years_default: int
     staleness_warning_days: int
+    #: Y per migration effort class (§12). An effort assumption stated in the
+    #: pack rather than hidden in the scorer, so an operator can edit it with
+    #: the same freedom the Z slider gives them. Optional: a pack without it
+    #: scores every finding at ``y_years_default``, which is what shipped
+    #: before this key existed.
+    y_years_by_action_class: Mapping[str, int] = field(default=_EMPTY_MAP)
+
+    def y_years_for(self, action_class: str | None) -> tuple[int, str]:
+        """``(Y, why)`` for one action class. Never raises, always explains.
+
+        The fallback is not a failure — a pack may deliberately decline to
+        estimate an effort class — but it must be visible on the row, because
+        a Y nobody can trace is indistinguishable from a Y nobody chose.
+        """
+        if action_class is None:
+            return self.y_years_default, "policy_default (no pqc_targets rule matched)"
+        mapped = self.y_years_by_action_class.get(action_class)
+        if mapped is None:
+            return (
+                self.y_years_default,
+                f"policy_default (no y_years_by_action_class entry for {action_class})",
+            )
+        return int(mapped), f"action_class:{action_class}"
 
     def age_days(self, today: date | None = None) -> int:
         return ((today or date.today()) - self.published).days
@@ -251,7 +275,44 @@ def _load_version(policy_dir: Path) -> PolicyVersion:
         z_years_default=int(raw["z_years_default"]),
         y_years_default=int(raw["y_years_default"]),
         staleness_warning_days=int(raw["staleness_warning_days"]),
+        y_years_by_action_class=_load_y_by_action_class(raw),
     )
+
+
+def _load_y_by_action_class(raw: Mapping[str, Any]) -> Mapping[str, int]:
+    """``y_years_by_action_class``. Optional, but wrong is not tolerated.
+
+    A typo'd key would silently score that effort class at the default, and a
+    Y that quietly reverts is worse than a Y that never varied: the row would
+    claim an effort assumption the pack does not actually make. So the loader
+    refuses the pack instead, naming the offending key — the same treatment
+    an unrecognised ``condition`` gets in §6.
+    """
+    value = raw.get("y_years_by_action_class")
+    if value is None:
+        return _EMPTY_MAP
+    if not isinstance(value, Mapping):
+        raise PolicyValidationError(
+            f"{VERSION_FILE}: 'y_years_by_action_class' must be a mapping of "
+            "action class to years"
+        )
+
+    known = {member.value for member in ActionClass}
+    resolved: dict[str, int] = {}
+    for key, years in value.items():
+        name = str(key)
+        if name not in known:
+            raise PolicyValidationError(
+                f"{VERSION_FILE}: 'y_years_by_action_class' names {name!r}, which is not "
+                f"an action class. Valid keys: {', '.join(sorted(known))}."
+            )
+        if isinstance(years, bool) or not isinstance(years, int) or years < 0:
+            raise PolicyValidationError(
+                f"{VERSION_FILE}: 'y_years_by_action_class.{name}' must be a non-negative "
+                f"whole number of years, got {years!r}"
+            )
+        resolved[name] = years
+    return MappingProxyType(resolved)
 
 
 def _load_algorithms(policy_dir: Path) -> tuple[AlgorithmRule, ...]:

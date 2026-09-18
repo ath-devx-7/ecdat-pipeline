@@ -17,6 +17,7 @@ const file = (path: string) => ({
   path,
   size_bytes: 10,
   approved: false,
+  data_lifetime_years: null,
 });
 
 const tree: DirectoryNode = {

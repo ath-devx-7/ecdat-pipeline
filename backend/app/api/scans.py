@@ -34,7 +34,7 @@ from app.collectors.cbom_import import CbomImportError, import_cbom
 from app.config import Settings, get_settings
 from app.core.policy_loader import PolicyPack, get_policy
 from app.db import get_session
-from app.intake.selection import SelectionError, approve_paths
+from app.intake.selection import SelectionError, approve_paths, set_file_lifetimes
 from app.intake.stage import StagingError, stage_source
 from app.intake.surface import FileCapExceeded, walk_surface
 from app.models.enums import RecommendationStatus, ScanMode, ScanStatus
@@ -203,11 +203,25 @@ def approve_scan_files(
 
     try:
         approved = approve_paths(session, scan_id, payload.paths)
+        # X lands before the run, not after it: `run_scan` scores the findings
+        # in the same call, and a lifetime that arrived afterwards would need a
+        # re-score to take effect — which is exactly the kind of "the number on
+        # screen is not the number that was used" gap §12 exists to close.
+        overrides = set_file_lifetimes(session, scan_id, payload.file_lifetimes)
     except SelectionError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
+    if payload.data_lifetime_years is not None:
+        scan.data_lifetime_years = payload.data_lifetime_years
     scan.approved_count = approved
     session.flush()
+    if overrides:
+        logger.info(
+            "scan %s: %d file(s) carry their own data lifetime; the rest use X=%s",
+            scan.id,
+            overrides,
+            scan.data_lifetime_years,
+        )
     logger.info("scan %s approved %d of %d file(s)", scan.id, approved, scan.file_count)
 
     result = run_scan(session, scan, settings)

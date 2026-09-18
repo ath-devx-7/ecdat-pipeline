@@ -73,6 +73,8 @@ def test_files_endpoint_returns_a_nested_tree(client, source_folder) -> None:
     assert all(child["type"] == "file" for child in nested["children"])
     assert nested["children"][0]["path"].startswith("nested/")
     # Path and size only — the surface scan reads no content (§4 step 3).
+    # `data_lifetime_years` is the exception that proves it: a number the user
+    # types on this screen, not anything read out of the file.
     assert set(nested["children"][0]) == {
         "type",
         "id",
@@ -80,6 +82,7 @@ def test_files_endpoint_returns_a_nested_tree(client, source_folder) -> None:
         "path",
         "size_bytes",
         "approved",
+        "data_lifetime_years",
     }
 
 
@@ -337,3 +340,74 @@ def test_a_scan_that_has_not_run_has_no_diagnostics(client, source_folder) -> No
     scan = _create_folder_scan(client, source_folder(4))
 
     assert client.get(f"/api/scans/{scan['id']}").json()["diagnostics"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Per-file data lifetimes (§12)
+# --------------------------------------------------------------------------- #
+
+
+def test_x_is_supplied_with_the_approval_not_at_intake(
+    client, db_session, source_folder
+) -> None:
+    """The approval screen is where the user is reading their own file tree."""
+    folder = source_folder(3)
+    created = client.post(
+        "/api/scans",
+        json={"mode": "files", "source_type": "folder", "source_ref": str(folder)},
+    )
+    assert created.status_code == 201, created.text
+    scan_id = created.json()["id"]
+    assert created.json()["data_lifetime_years"] is None
+
+    tree = client.get(f"/api/scans/{scan_id}/files").json()
+    paths = [child["path"] for child in tree["root"]["children"] if child["type"] == "file"]
+    assert all(child.get("data_lifetime_years") is None for child in tree["root"]["children"])
+
+    response = client.post(
+        f"/api/scans/{scan_id}/approve",
+        json={
+            "paths": paths,
+            "data_lifetime_years": 20,
+            "file_lifetimes": {paths[0]: 40},
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    scan = db_session.get(Scan, UUID(scan_id))
+    assert scan.data_lifetime_years == 20
+    stored = {row.path: row.data_lifetime_years for row in scan.files}
+    assert stored[paths[0]] == 40
+    assert all(stored[path] is None for path in paths[1:])
+
+
+def test_a_lifetime_on_an_unknown_path_is_rejected(client, source_folder) -> None:
+    """An override on a file that does not exist would silently do nothing."""
+    folder = source_folder(2)
+    scan = _create_folder_scan(client, folder)
+    tree = client.get(f"/api/scans/{scan['id']}/files").json()
+    paths = [child["path"] for child in tree["root"]["children"] if child["type"] == "file"]
+
+    response = client.post(
+        f"/api/scans/{scan['id']}/approve",
+        json={"paths": paths, "data_lifetime_years": 20, "file_lifetimes": {"nope.txt": 5}},
+    )
+
+    assert response.status_code == 400
+    assert "nope.txt" in response.json()["detail"]
+
+
+def test_unusable_lifetimes_are_rejected_at_the_gate(client, source_folder) -> None:
+    folder = source_folder(2)
+    scan = _create_folder_scan(client, folder)
+    tree = client.get(f"/api/scans/{scan['id']}/files").json()
+    paths = [child["path"] for child in tree["root"]["children"] if child["type"] == "file"]
+
+    for body in (
+        {"paths": paths, "data_lifetime_years": -1},
+        {"paths": paths, "data_lifetime_years": 101},
+        {"paths": paths, "file_lifetimes": {paths[0]: -1}},
+        {"paths": paths, "file_lifetimes": {paths[0]: 101}},
+        {"paths": paths, "data_lifetime_years": 20, "extra": 1},
+    ):
+        assert client.post(f"/api/scans/{scan['id']}/approve", json=body).status_code == 422, body

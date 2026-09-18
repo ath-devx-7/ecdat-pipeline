@@ -283,6 +283,16 @@ puts a three-year rewrite at position one is operationally useless:
 | `wave_3` | Quantum-vulnerable but not overdue at this data lifetime, or an authentication primitive. |
 | `verify` | Low-confidence observations and unclassified algorithms. Confirm before planning. |
 
+All three inputs vary per finding, and each says where it came from. Y is read from the
+finding's cheapest action class — `y_years_by_action_class` in the pack costs a config
+change at one year and a hardware replacement at five — so a `KexAlgorithms` line and an
+HSM swap are not reported as the same piece of work. X is the scan-wide data lifetime
+unless the finding's own file was given a different one — asked for on the approval screen,
+where the user is already reading their file tree, with a number for the whole scan and an
+override on any file or folder. Both are assumptions rather than measurements, and both are
+editable: the effort figures in the pack, the lifetimes on the approval screen. The row carries `x_source` and `y_source` beside the numbers so an auditor can
+see which assumption produced the wave.
+
 Every input and every factor is stored on the row so an auditor can reconstruct any wave.
 Z is exposed as a slider: it is an assumption, and testing a plan against a sooner arrival
 is more honest than hardcoding one date.
@@ -380,7 +390,7 @@ Everything the dashboard shows is a query over the analysis tables, computed on 
 
 | File | Holds |
 |---|---|
-| `version.yaml` | Pack version and publish date; `z_years_default`, `y_years_default`, `staleness_warning_days` |
+| `version.yaml` | Pack version and publish date; `z_years_default`, `y_years_default`, `y_years_by_action_class` (the migration effort assumed per action class), `staleness_warning_days` |
 | `algorithms.yaml` | The verdict rules — family, primitive, conditions, verdict, citation |
 | `pqc_targets.yaml` | Migration targets with prerequisites, action classes and the hybrid preference; the parameter-set rule by data lifetime |
 | `algorithm_aliases.yaml` | Every observed spelling of an algorithm → canonical family and OID, each entry cited |

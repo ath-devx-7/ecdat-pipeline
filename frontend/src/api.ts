@@ -62,6 +62,8 @@ export interface FileNode {
   path: string;
   size_bytes: number | null;
   approved: boolean;
+  // This file's own X, or null for "scored at the scan-wide value".
+  data_lifetime_years: number | null;
 }
 
 export interface DirectoryNode {
@@ -337,12 +339,20 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+export interface ApprovalLifetimes {
+  // the scan-wide X, and the fallback for every file with no entry below
+  years: number;
+  // only the files the user gave a different lifetime, by path
+  perFile: Record<string, number>;
+}
+
 export interface ScanCreate {
   mode: ScanMode;
   source_type: SourceType;
   source_ref?: string;
   probe_targets: ProbeTarget[];
-  data_lifetime_years: number;
+  // Only a probe_only scan sets X here: it has no approval screen to set it on.
+  data_lifetime_years?: number | null;
 }
 
 export const api = {
@@ -374,8 +384,14 @@ export const api = {
       body: file,
     }),
   files: (id: string) => request<FileTree>(`/api/scans/${id}/files`),
-  approve: (id: string, paths: string[]) =>
-    request<ApproveResponse>(`/api/scans/${id}/approve`, json({ paths })),
+  // X travels with the approval (§12): the same call that releases the run
+  // carries the lifetimes, so there is never a moment where the number on the
+  // screen is not the number the findings were scored against.
+  approve: (id: string, paths: string[], x: ApprovalLifetimes) =>
+    request<ApproveResponse>(
+      `/api/scans/${id}/approve`,
+      json({ paths, data_lifetime_years: x.years, file_lifetimes: x.perFile }),
+    ),
   overview: (id: string) => request<Overview>(`/api/scans/${id}/overview`),
   findings: (id: string, params: URLSearchParams) =>
     request<FindingPage>(`/api/scans/${id}/findings?${params.toString()}`),

@@ -104,6 +104,10 @@ def test_scans_table_carries_the_scan_scope_fields() -> None:
     for name in ("probe_targets", "data_lifetime_years", "policy_version"):
         assert name in columns
 
+    # X is per file as well as per scan (§12): the approval screen sets it on
+    # the row the user was looking at, and the scorer reads it from there.
+    assert "data_lifetime_years" in Base.metadata.tables["scan_files"].columns
+
 
 def test_enum_values_are_the_spec_strings() -> None:
     """Enums store their values, not their Python member names."""

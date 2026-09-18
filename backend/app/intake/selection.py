@@ -12,7 +12,7 @@ shown in the UI no longer matches what gets read.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -20,7 +20,13 @@ from sqlalchemy.orm import Session
 
 from app.models.scan import ScanFile
 
-__all__ = ["SelectionError", "approve_paths", "approved_paths", "normalise_path"]
+__all__ = [
+    "SelectionError",
+    "approve_paths",
+    "approved_paths",
+    "normalise_path",
+    "set_file_lifetimes",
+]
 
 #: How many unknown paths an error message names before it stops listing them.
 _MAX_REPORTED_UNKNOWN = 10
@@ -63,6 +69,41 @@ def approve_paths(session: Session, scan_id: UUID, paths: Iterable[str]) -> int:
 
     for row in rows:
         row.approved = row.path in requested
+    session.flush()
+    return len(requested)
+
+
+def set_file_lifetimes(
+    session: Session, scan_id: UUID, lifetimes: Mapping[str, int]
+) -> int:
+    """Set each named file's own X, and clear it on every file not named.
+
+    Set to *exactly* the submitted map, for the same reason approval is: a
+    lifetime the user removed on the screen must not survive in the row, or the
+    scan would be scored against a number that is no longer on any screen.
+
+    Raises :class:`SelectionError` naming paths that are not in this scan's file
+    list — an override on a file that does not exist would silently do nothing,
+    and the user would read the resulting wave as a judgement about their data.
+    """
+    requested = {normalise_path(path): years for path, years in lifetimes.items()}
+    requested.pop("", None)
+
+    rows = session.scalars(sa.select(ScanFile).where(ScanFile.scan_id == scan_id)).all()
+    known = {row.path for row in rows}
+
+    unknown = sorted(set(requested) - known)
+    if unknown:
+        shown = ", ".join(unknown[:_MAX_REPORTED_UNKNOWN])
+        suffix = "" if len(unknown) <= _MAX_REPORTED_UNKNOWN else f" (+{len(unknown) - _MAX_REPORTED_UNKNOWN} more)"
+        raise SelectionError(
+            f"{len(unknown)} data-lifetime path(s) are not in this scan's file list: "
+            f"{shown}{suffix}. Paths must be exactly as returned by "
+            "GET /api/scans/{id}/files."
+        )
+
+    for row in rows:
+        row.data_lifetime_years = requested.get(row.path)
     session.flush()
     return len(requested)
 

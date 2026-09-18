@@ -128,6 +128,19 @@ function Blockers({ chains }: { chains: BlockedChain[] }) {
 // table still lists them, and the count on each row says how many there were.
 type ItemGroup = { item: RoadmapItem; occurrences: number; lines: string[] };
 
+// The scorer stores every Mosca input on the row and the provenance of the two
+// that are assumptions. Read as recorded, never relabelled: the rationale is an
+// audit trail, and a prettified value is no longer the value that was stored.
+function mosca(rationale: Record<string, unknown> | null, key: string): number | null {
+  const value = rationale?.[key];
+  return typeof value === "number" ? value : null;
+}
+
+function source(rationale: Record<string, unknown> | null, key: string): string | null {
+  const value = rationale?.[key];
+  return typeof value === "string" ? value : null;
+}
+
 function groupItems(items: RoadmapItem[]): ItemGroup[] {
   const groups = new Map<string, ItemGroup>();
   for (const item of items) {
@@ -144,6 +157,9 @@ function groupItems(items: RoadmapItem[]): ItemGroup[] {
       file,
       item.verdict ?? "",
       item.urgency_years ?? "",
+      // X varies per asset now, so two findings sharing a file but scored at
+      // different lifetimes are two rows, not one collapsed row.
+      String(mosca(item.rationale, "x_years")),
       item.recommendations.map((r) => `${r.status}:${r.target ?? ""}`).join("|"),
     ].join("\u0000");
 
@@ -185,6 +201,19 @@ function Item({ group, scanId }: { group: ItemGroup; scanId: string }) {
             <span className="text-slate-600">overdue by {item.urgency_years} years</span>
           ) : (
             <span className="text-slate-500">Mosca not applied</span>
+          )}
+          {/* The inputs beside the answer. X and Y both vary per finding, so
+              "overdue by 9 years" on its own no longer says which assumption
+              produced it. */}
+          <div className="text-slate-500">
+            X = {mosca(item.rationale, "x_years") ?? "—"}, Y = {mosca(item.rationale, "y_years") ?? "—"},
+            Z = {mosca(item.rationale, "z_years") ?? "—"}
+          </div>
+          {source(item.rationale, "x_source") && (
+            <div className="text-slate-500">X from {source(item.rationale, "x_source")}</div>
+          )}
+          {source(item.rationale, "y_source") && (
+            <div className="text-slate-500">Y from {source(item.rationale, "y_source")}</div>
           )}
         </div>
       </div>

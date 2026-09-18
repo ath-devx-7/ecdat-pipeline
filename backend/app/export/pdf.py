@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import sqlalchemy as sa
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy.orm import Session
 
@@ -39,7 +40,7 @@ from app.config import get_settings
 from app.core.policy_loader import PolicyPack, get_policy
 from app.core.visibility import hidden_verdicts, visible_verdict_keys
 from app.models.enums import RecommendationStatus, Verdict, Wave
-from app.models.scan import Scan
+from app.models.scan import Scan, ScanFile
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +281,25 @@ def report_context(session: Session, scan: Scan, policy: PolicyPack | None = Non
         "pack_citations": pack_citations,
         "z_years_used": loaded.z_years_used(),
         "y_years": pack.version.y_years_default,
+        # Y is per finding now, so the scope table states the pack's assumption
+        # for each effort class rather than one number the rows do not use.
+        "y_years_by_action_class": dict(pack.version.y_years_by_action_class),
+        # The files the user singled out. Listed in full: a reader has to be
+        # able to see which assets were held to a different horizon and which
+        # were not, or the waves in section 3 cannot be checked.
+        "file_lifetimes": _file_lifetimes(session, scan),
     }
+
+
+def _file_lifetimes(session: Session, scan: Scan) -> list[tuple[str, int]]:
+    """``(path, years)`` for every file given its own X, shortest horizon last."""
+    rows = session.execute(
+        sa.select(ScanFile.path, ScanFile.data_lifetime_years).where(
+            ScanFile.scan_id == scan.id,
+            ScanFile.data_lifetime_years.is_not(None),
+        )
+    ).all()
+    return sorted(((path, years) for path, years in rows), key=lambda row: (-row[1], row[0]))
 
 
 # --------------------------------------------------------------------------- #

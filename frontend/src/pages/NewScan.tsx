@@ -1,18 +1,21 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, zStorageKey, type Policy, type ProbeTarget, type Scan, type ScanMode, type SourceType } from "../api";
+import { api, type Policy, type ProbeTarget, type Scan, type ScanMode, type SourceType } from "../api";
 import { titleCase } from "../lib/labels";
 import { formatBytes } from "../lib/tree";
 
-// §13 screen 1. The data-lifetime dropdown is X in Mosca's inequality and the
-// Z slider is the arrival assumption; both are inputs a person supplies, and
-// the slider default is read from the policy pack rather than hardcoded.
+// §13 screen 1. Scope only: what to read, and where to probe. Mosca's two
+// human inputs live where the user can actually answer them — X on the approval
+// screen, against the real file tree, and Z beside the waves it moves on the
+// overview. A probe_only scan has no approval screen, so X is asked for here in
+// that mode alone.
 
-const LIFETIMES: { label: string; years: number }[] = [
-  { label: "< 1 year", years: 0 },
-  { label: "5–10 years", years: 10 },
-  { label: "20+ years", years: 20 },
-];
+//: Years, as a number. Bounded to match the API, which rejects anything else.
+export function clampYears(entered: string, previous: number): number {
+  const value = Number(entered);
+  if (entered.trim() === "" || Number.isNaN(value)) return previous;
+  return Math.min(100, Math.max(0, Math.trunc(value)));
+}
 
 // `webkitdirectory` is what turns a file input into a folder picker, and it is
 // not in React's typings; spread as a plain record rather than cast away the
@@ -97,17 +100,14 @@ export default function NewScan() {
   const [archive, setArchive] = useState<File | null>(null);
   const [targets, setTargets] = useState("");
   const [lifetime, setLifetime] = useState(20);
-  const [z, setZ] = useState<number | null>(null);
+
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<Scan[]>([]);
 
   useEffect(() => {
-    api.policy().then((p) => {
-      setPolicy(p);
-      setZ((current) => current ?? p.z_years_default);
-    });
+    api.policy().then(setPolicy);
     api.scans().then(setRecent).catch(() => setRecent([]));
   }, []);
 
@@ -170,9 +170,10 @@ export default function NewScan() {
         source_type: wantsFiles ? sourceType : "none",
         source_ref: wantsFiles ? ref : undefined,
         probe_targets: wantsProbe ? parseTargets(targets) : [],
-        data_lifetime_years: lifetime,
+        // Null for a file scan: the approval screen supplies it, and sending
+        // a placeholder now would put a number nobody chose on the scan row.
+        data_lifetime_years: wantsFiles ? null : lifetime,
       });
-      if (z !== null) localStorage.setItem(zStorageKey(scan.id), String(z));
       navigate(wantsFiles ? `/scans/${scan.id}/files` : `/scans/${scan.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -339,47 +340,40 @@ export default function NewScan() {
           </div>
         )}
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
+        {/* X is asked for on the approval screen, where the user is looking at
+            their own file tree and can give one file a different lifetime from
+            the rest — a judgement nobody can make against an empty form. A
+            probe_only scan never reaches that screen, so it is the one mode
+            that still answers here. Z is not asked for at all: it is an
+            assumption about the world rather than about this scan, and it
+            belongs beside the waves it moves, on the overview. */}
+        {!wantsFiles && (
+          <div className="sm:w-1/2">
             <label className="label" htmlFor="lifetime">
-              Data lifetime (X — how long the data must stay confidential)
-            </label>
-            <select
-              id="lifetime"
-              className="input"
-              value={lifetime}
-              onChange={(e) => setLifetime(Number(e.target.value))}
-            >
-              {LIFETIMES.map((option) => (
-                <option key={option.years} value={option.years}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label" htmlFor="z">
-              Years until a cryptographically relevant quantum computer (Z)
-              {z !== null && <span className="ml-2 text-slate-800">{z}</span>}
+              Data lifetime (X) — years these hosts' traffic must stay confidential
             </label>
             <input
-              id="z"
-              type="range"
-              min={1}
-              max={40}
-              value={z ?? 12}
-              disabled={z === null}
-              onChange={(e) => setZ(Number(e.target.value))}
-              className="w-full"
+              id="lifetime"
+              type="number"
+              className="input"
+              min={0}
+              max={100}
+              value={lifetime}
+              onChange={(e) => setLifetime(clampYears(e.target.value, lifetime))}
             />
             <p className="mt-1 text-xs text-slate-500">
-              Policy default {policy?.z_years_default ?? "…"} years (pack {policy?.version ?? "…"}).
-              Z is an assumption, not a measurement; it can be moved again on the overview.
+              Mosca's inequality needs it: without X a probed key exchange can only be sent to
+              Verify, never placed in a wave.
             </p>
           </div>
-        </div>
+        )}
 
         {error && <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>}
+
+        <p className="text-xs text-slate-500">
+          Policy pack {policy?.version ?? "…"} — stamped onto this scan at creation, so every
+          verdict stays reproducible against the pack that produced it.
+        </p>
 
         <button className="btn" disabled={busy}>
           {uploading

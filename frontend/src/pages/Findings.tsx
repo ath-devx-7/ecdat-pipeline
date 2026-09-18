@@ -18,6 +18,15 @@ import {
 
 const FILTERS = ["verdict", "wave", "collector", "confidence", "source_layer"] as const;
 
+// `x_source` and `y_source` are written by the scorer and are plain strings —
+// "rule[1]: etc/openssl.cnf*", "scan default", "action_class:config". Rendered
+// as they were recorded rather than prettified: the rationale is an audit
+// trail, and a relabelled value is no longer the value that was stored.
+function sourceOf(rationale: Record<string, unknown> | null, key: string): string | null {
+  const value = rationale?.[key];
+  return typeof value === "string" ? value : null;
+}
+
 export default function Findings() {
   const { scanId = "" } = useParams();
   const [params, setParams] = useSearchParams();
@@ -226,6 +235,17 @@ function Detail({ finding, onClose }: { finding: FindingDetail; onClose: () => v
               X = {finding.risk.x_years ?? "—"}, Y = {finding.risk.y_years}, Z = {finding.risk.z_years}
               {finding.risk.urgency_years === null && " · Mosca not applied"}
             </div>
+            {/* Where X and Y came from. Two of the three inputs are assumptions
+                rather than measurements, and a wave nobody can trace back to
+                the assumption behind it is a wave nobody can argue with. */}
+            <dl className="mt-1 text-slate-500">
+              {sourceOf(finding.risk.rationale, "x_source") && (
+                <div>X from {sourceOf(finding.risk.rationale, "x_source")}</div>
+              )}
+              {sourceOf(finding.risk.rationale, "y_source") && (
+                <div>Y from {sourceOf(finding.risk.rationale, "y_source")}</div>
+              )}
+            </dl>
             {finding.risk.rationale && typeof finding.risk.rationale.because === "string" && (
               <div className="mt-1 text-slate-700">{finding.risk.rationale.because}</div>
             )}

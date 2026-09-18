@@ -24,7 +24,8 @@ class Scan(Base):
     source_ref: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     #: list of {host, port} — the prober's hard allowlist (§7.5)
     probe_targets: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    #: X in Mosca's inequality, from the intake form (§12)
+    #: X in Mosca's inequality — the scan-wide value, and the fallback for every
+    #: file that carries no override of its own (§12)
     data_lifetime_years: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     #: stamped from the loaded policy pack at scan creation (§6)
     policy_version: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
@@ -60,6 +61,12 @@ class ScanFile(Base):
     path: Mapped[str] = mapped_column(sa.Text, nullable=False)
     size_bytes: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
     approved: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    #: X for this file alone, set on the approval screen (§12). ``None`` means
+    #: no override — the file is scored at the scan's ``data_lifetime_years``.
+    #: Stored per file rather than as a pattern because the user set it on a
+    #: row they were looking at; a glob they have to re-read to predict is a
+    #: worse description of their own estate than the file list itself.
+    data_lifetime_years: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     scan: Mapped[Scan] = relationship(back_populates="files")
 

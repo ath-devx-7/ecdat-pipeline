@@ -5,3 +5,17 @@ published: "2026-09-01"
 z_years_default: 12       # years until a cryptographically relevant quantum computer
 y_years_default: 1        # default migration duration
 staleness_warning_days: 180
+
+# Y in Mosca's inequality, per migration effort class (§12).
+#
+# These are planning ASSUMPTIONS, not measurements — the same standing Z has.
+# Nobody has published a measured migration duration per action class, so the
+# pack states one openly and lets an operator edit it rather than hiding a
+# constant in the scorer. A finding whose cheapest action class is not named
+# here, or that no pqc_targets rule matches at all, falls back to
+# y_years_default and the risk row says so in `y_source`.
+y_years_by_action_class:
+  config: 1           # a setting change and a restart
+  library_upgrade: 2  # a dependency bump, a rebuild, a regression pass
+  code_change: 3      # touching source, review, staged rollout
+  hardware: 5         # procurement, installation, key ceremony

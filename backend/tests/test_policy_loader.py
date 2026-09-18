@@ -224,3 +224,63 @@ def test_pack_goes_stale_after_the_configured_window(shipped_policy_dir: Path) -
 
     assert version.is_stale(date(2026, 9, 30)) is False
     assert version.is_stale(date(2027, 9, 1)) is True
+
+
+# --------------------------------------------------------------------------- #
+# Y per action class (§12)
+# --------------------------------------------------------------------------- #
+
+
+def test_the_shipped_pack_prices_every_action_class(shipped_policy_dir) -> None:
+    """Y varies per finding only if the pack says what each effort class costs."""
+    version = load_policy(shipped_policy_dir).version
+
+    assert dict(version.y_years_by_action_class) == {
+        "config": 1,
+        "library_upgrade": 2,
+        "code_change": 3,
+        "hardware": 5,
+    }
+    # The compatibility anchor: a config change is still the one-year default.
+    assert version.y_years_for("config") == (1, "action_class:config")
+
+
+def test_an_unknown_action_class_key_refuses_the_pack(policy_dir_factory) -> None:
+    """A typo'd key would silently score that class at the default.
+
+    A Y that quietly reverts is worse than one that never varied: the row would
+    claim an effort assumption the pack does not actually make. So the load
+    fails and names the key, the way an unrecognised `condition` does.
+    """
+    def typo(document: dict) -> None:
+        document["y_years_by_action_class"]["libary_upgrade"] = 2
+
+    policy_dir = policy_dir_factory("version.yaml", typo)
+
+    with pytest.raises(PolicyValidationError, match="libary_upgrade"):
+        load_policy(policy_dir)
+
+
+@pytest.mark.parametrize("bad", [-1, "soon", 1.5, None])
+def test_a_non_negative_whole_number_of_years_is_required(policy_dir_factory, bad) -> None:
+    def rewrite(document: dict) -> None:
+        document["y_years_by_action_class"]["hardware"] = bad
+
+    policy_dir = policy_dir_factory("version.yaml", rewrite)
+
+    with pytest.raises(PolicyValidationError, match="hardware"):
+        load_policy(policy_dir)
+
+
+def test_a_pack_without_the_mapping_still_loads_at_the_default(policy_dir_factory) -> None:
+    """The key is optional. A pack that declines to estimate effort scores as it did."""
+    def drop(document: dict) -> None:
+        del document["y_years_by_action_class"]
+
+    version = load_policy(policy_dir_factory("version.yaml", drop)).version
+
+    assert dict(version.y_years_by_action_class) == {}
+    assert version.y_years_for("hardware") == (
+        1,
+        "policy_default (no y_years_by_action_class entry for hardware)",
+    )

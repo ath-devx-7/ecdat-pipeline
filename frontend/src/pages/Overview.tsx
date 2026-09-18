@@ -15,6 +15,13 @@ import {
 // unassessed count beside it; the four recommendation statuses are always four
 // tiles; and the Z slider re-scores the scan live, because Z is an assumption.
 
+// Z is an assumption about the world rather than a fact about this scan, so it
+// is answered here, beside the waves it moves and the report that carries them
+// out of the room — not on the intake form, where it would look like a property
+// of the source. It starts lower than the pack's own figure deliberately: a plan
+// that only holds if the machine is late is not a plan.
+const DEFAULT_Z = 5;
+
 export default function Overview() {
   const { scanId = "" } = useParams();
   const [data, setData] = useState<OverviewData | null>(null);
@@ -33,17 +40,18 @@ export default function Overview() {
   useEffect(() => {
     load()
       .then(async (loaded) => {
-        // The New-scan screen remembered a Z for this scan; apply it once.
+        // Z opens at DEFAULT_Z unless this scan has already been moved, in
+        // which case that choice stands — the slider must not reset the answer
+        // out from under someone every time they come back to the page.
         const remembered = localStorage.getItem(zStorageKey(scanId));
-        const wanted = remembered ? Number(remembered) : null;
-        if (wanted !== null && loaded.z_years_used !== null && wanted !== loaded.z_years_used) {
+        const wanted = remembered ? Number(remembered) : DEFAULT_Z;
+        if (loaded.z_years_used !== null && wanted !== loaded.z_years_used) {
+          // The stored rows were scored at a different Z, so the wave chart on
+          // screen would not be the chart this slider position describes.
           await api.rescore(scanId, wanted);
-          localStorage.removeItem(zStorageKey(scanId));
           await load();
-          setZ(wanted);
-        } else {
-          setZ(loaded.z_years_used ?? loaded.policy.z_years_default);
         }
+        setZ(wanted);
       })
       .catch((err) => setError(err.message));
   }, [scanId, load]);
@@ -55,6 +63,9 @@ export default function Overview() {
       setRescoring(true);
       try {
         await api.rescore(scanId, value);
+        // Remembered per scan, so reopening the page does not throw the answer
+        // away and re-score at the default behind the user's back.
+        localStorage.setItem(zStorageKey(scanId), String(value));
         await load();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -93,7 +104,9 @@ export default function Overview() {
         </h1>
         <span className="text-sm text-slate-600">
           {titleCase(scan.mode)} · <StatusWord status={scan.status} /> · {data.finding_count} findings
-          {scan.data_lifetime_years !== null && <> · X = {scan.data_lifetime_years} years</>}
+          {scan.data_lifetime_years !== null && (
+            <> · X = {scan.data_lifetime_years} years by default, per file on the approval screen</>
+          )}
         </span>
         <div className="ml-auto flex items-center gap-2 text-sm">
           <a className="btn" href={api.reportUrl(scanId)}>
@@ -182,20 +195,18 @@ export default function Overview() {
               className="w-full"
             />
             <p className="text-xs text-slate-500">
-              Mosca: (X + Y) − Z &gt; 0 means overdue. Y = {policy.y_years_default} (migration
-              duration, from the pack). Only quantum-vulnerable key exchanges and ciphers move with
-              Z; wave 0 does not, because broken today is not a quantum deadline.
+              Mosca: (X + Y) − Z &gt; 0 means overdue. X is per file, from the approval screen; Y is
+              each finding's own migration effort, from the pack ({policy.y_years_default} by
+              default). Z starts at {DEFAULT_Z} and is an assumption, not a measurement — the pack's
+              own figure is {policy.z_years_default}. Only quantum-vulnerable key exchanges and
+              ciphers move with Z; wave 0 does not, because broken today is not a quantum deadline.
             </p>
             {data.mosca.subject > 0 ? (
               <p className="mt-1 text-xs text-slate-700">
                 <strong>{data.mosca.subject}</strong> finding{data.mosca.subject === 1 ? "" : "s"} subject to
-                Mosca here; <strong>{data.mosca.overdue}</strong> overdue at Z = {data.z_years_used ?? z}
-                {scan.data_lifetime_years !== null && (
-                  <>
-                    {" "}(overdue while Z &lt; {scan.data_lifetime_years + policy.y_years_default})
-                  </>
-                )}
-                .
+                Mosca here; <strong>{data.mosca.overdue}</strong> overdue at Z = {data.z_years_used ?? z}.
+                Each finding crosses at its own X + Y, so they do not all move together — the
+                per-row values are on the findings and roadmap screens.
               </p>
             ) : (
               <p className="mt-1 rounded bg-slate-100 p-2 text-xs text-slate-700">
