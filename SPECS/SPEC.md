@@ -1,4 +1,4 @@
-# ECDAT — Build Specification
+# Q-Crypto — Build Specification
 
 **Enterprise Cryptographic Discovery & Analysis Tool**
 Smart India Hackathon 2026 · Problem Statement SIH26164 · NTRO

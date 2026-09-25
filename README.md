@@ -1,12 +1,12 @@
-# ECDAT
+# Q-Crypto
 
 **Enterprise Cryptographic Discovery & Analysis Tool** — SIH 2026, problem statement SIH26164 (NTRO).
 
 Scans a codebase, container image or live endpoint for cryptography, classifies each
 finding as broken / quantum-vulnerable / safe against a cited policy pack, and produces a
 **ranked migration plan** — waves, not a sorted list — with a replacement target for each
-finding or the chain of prerequisites standing in its way. See [SPEC.md](SPEC.md) for the
-full specification and [BUILD_PLAN.md](BUILD_PLAN.md) for the order it was built in.
+finding or the chain of prerequisites standing in its way. See [SPECS/SPEC.md](SPECS/SPEC.md)
+for the full specification.
 
 The two differentiators: **drift detection** (what a configuration declares vs. what the
 live server actually negotiates) and **risk ranking via Mosca's inequality**, applied only
@@ -49,7 +49,7 @@ where harvest-now-decrypt-later applies.
 
 | Need | For |
 |---|---|
-| Python 3.11+ | backend |
+| Python 3.12+ | backend |
 | Node 20+ and npm | dashboard |
 | PostgreSQL 16 | the real store; SQLite works for a local trial and for the tests |
 | Docker with Compose | the demo lab (live TLS targets, the compiled binary) — optional |
@@ -131,31 +131,36 @@ them from any web server with `/api` reverse-proxied to uvicorn.
 docker compose -f demo/docker-compose.yml up --build
 ```
 
-This builds six images and generates the demo certificates. It publishes three services:
+This builds six images. It publishes three services:
 `localhost:8443` (nginx accepting TLS 1.0 with an RSA-1024 SHA-1 certificate — the drift
 target), `localhost:8444` (nginx on TLS 1.3 only with ECDSA — the clean host) and
-`localhost:8081` (the weak Python service). Without Docker, `./demo/gen_certs.sh` generates
-the certificates alone and a `files` scan of `demo/` still exercises every file collector.
+`localhost:8081` (the weak Python service). The demo certificates and compiled binary are
+committed, so without Docker a `files` scan of `demo/` still exercises every file collector.
 
 ### 4. Your first scan
 
 Open http://localhost:5173 and:
 
-1. **New scan.** Choose *Files and probe*, source type *Local folder*, then *Browse…*
-   and pick `ecdat-pipeline/demo`. Probe targets `localhost:8443` and `localhost:8444`,
-   data lifetime *20+ years*. Leave Z at the policy default.
-2. **File selection.** *Select all*, then *Approve and scan*. The request blocks while the
-   collectors run — a few seconds for the demo tree.
-3. **Overview.** Readiness with its denominator, all four recommendation statuses, verdicts,
-   waves, drift, policy stamp. Drag the Z slider to see the waves move.
-4. **Findings.** Filter by verdict, wave, collector, confidence or layer; click a row for
-   the verdict's citation, the Mosca inputs, the recommendation chain and raw evidence.
+1. **New Scan.** Choose *Files + network probe*, source *Local directory*, then *Browse…*
+   and pick `ecdat-pipeline/demo`. Probe targets `localhost:8443` and `localhost:8444`.
+   *Run surface scan*.
+2. **File Selection.** Select all. Set the data lifetime (X) — 20 years for the whole scan
+   by default, overridable on any file or folder row. Then *Approve and run analysis*. The
+   request blocks while the collectors run — a few seconds for the demo tree.
+3. **Overview.** Readiness with its denominator, verdicts, primitives, collectors, waves,
+   all four recommendation statuses, policy stamp. Drag the Z slider (opens at 5, remembered
+   per scan) to see the waves move.
+4. **Findings.** Filter by verdict, wave, collector, confidence or layer (filters live in
+   the URL); click a row for the verdict's citation, the Mosca inputs and where X and Y came
+   from, the recommendation chain and raw evidence.
 5. **Drift.** The weak host's `openssl.cnf` declares a TLS 1.2 floor and the server accepts
    TLS 1.0, side by side, with the note that reports the difference without judging it.
-6. **Roadmap.** Findings by wave, each with target, prerequisites and action class.
+6. **Roadmap.** Work by wave, each with target, prerequisites and action class — grouped per
+   file and algorithm, with blocked work also counted by work item.
 
-From the overview, *PDF report* downloads the report, *Export CycloneDX* the CBOM, and
-*Import CBOM* accepts another tool's inventory — try `demo/sample_cbom.json`.
+The overview's *Exports* panel downloads the CycloneDX CBOM, the PDF report and the HTML
+report, and *Import CycloneDX CBOM* accepts another tool's inventory — try
+`demo/sample_cbom.json`.
 
 `demo/README.md` lists what every demo target must produce and, as much to the point, what
 must **not** be flagged.
@@ -170,14 +175,17 @@ ID=$(curl -s -X POST localhost:8000/api/scans -H 'content-type: application/json
   "mode": "files_and_probe",
   "source_type": "folder",
   "source_ref": "/absolute/path/to/ecdat-pipeline/demo",
-  "probe_targets": [{"host": "localhost", "port": 8443}, {"host": "localhost", "port": 8444}],
-  "data_lifetime_years": 20
+  "probe_targets": [{"host": "localhost", "port": 8443}, {"host": "localhost", "port": 8444}]
 }' | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 
-# 2. See the file tree, then approve exactly the paths the collectors may open
+# 2. See the file tree, then approve exactly the paths the collectors may open,
+#    with X for the scan and optional per-file overrides
 curl -s localhost:8000/api/scans/$ID/files
-curl -s -X POST localhost:8000/api/scans/$ID/approve -H 'content-type: application/json' \
-  -d '{"paths": ["weak-nginx/nginx.conf", "weak-nginx/openssl.cnf", "pyapp/app.py"]}'
+curl -s -X POST localhost:8000/api/scans/$ID/approve -H 'content-type: application/json' -d '{
+  "paths": ["weak-nginx/nginx.conf", "weak-nginx/openssl.cnf", "pyapp/app.py"],
+  "data_lifetime_years": 20,
+  "file_lifetimes": {"pyapp/app.py": 30}
+}'
 
 # 3. Read the results
 curl -s localhost:8000/api/scans/$ID/overview
@@ -199,10 +207,11 @@ Scan modes: `files` (a folder, a browser folder upload, a git URL, a Docker imag
 `probe_only` (host:port targets, no files, runs immediately with no approval step) and
 `files_and_probe` (both — the only mode in which drift detection has anything to compare).
 Data lifetime is X in Mosca's inequality: how long the data this system protects must stay
-confidential.
+confidential. File scans supply it at approval; `probe_only` has no approval step, so it
+sends `data_lifetime_years` at creation.
 
 `folder` sources are read where they live and never copied — an API path, for a caller
-that knows an absolute path on the ECDAT host. The dashboard's *Local folder* option is
+that knows an absolute path on the ECDAT host. The dashboard's *Local directory* option is
 `upload` instead: the same tree arriving over HTTP, because a browser can offer a folder
 picker but not a server-side path. The browser posts every file to `POST /api/uploads`,
 which lays them out under
@@ -219,7 +228,7 @@ daemon holding the image on *this* host, which a browser cannot know about, so t
 dashboard does not offer it.
 
 `docker_archive` is that same unpacking without the daemon, and it is what the dashboard's
-*Docker image* option does: run `docker save myimage:tag -o image.tar` wherever the image
+*Docker image tar* option does: run `docker save myimage:tag -o image.tar` wherever the image
 actually lives, and upload the tar itself. The browser posts it to
 `POST /api/uploads/image` — a raw body, not a multipart form, since it is one file — which
 streams it to
@@ -265,7 +274,9 @@ different statements about a host.
 each traceable to a published standard. `broken_now` and `quantum_vulnerable` are
 independent classifications, not two points on one scale: RSA-4096 is quantum-vulnerable
 and perfectly secure today; MD5 is broken today and irrelevant to quantum. AES and SHA-256
-are `quantum_safe` — Grover weakens symmetric crypto, it does not break it.
+are `quantum_safe` — Grover weakens symmetric crypto, it does not break it. Quantum-safe
+findings stay in the store and count toward readiness, but are hidden from the findings
+table, roadmap, CBOM export and report by default (`ECDAT_HIDE_QUANTUM_SAFE`).
 
 **Risk scorer** (§12) applies Mosca's inequality, `(X + Y) − Z`, where X is the data
 lifetime, Y the migration duration and Z the years until a cryptographically relevant
@@ -281,7 +292,7 @@ puts a three-year rewrite at position one is operationally useless:
 | `wave_1` | Overdue under Mosca and reachable by a config change or library upgrade. |
 | `wave_2` | Overdue, but a code change or hardware swap — needs budgeting, not deferring. |
 | `wave_3` | Quantum-vulnerable but not overdue at this data lifetime, or an authentication primitive. |
-| `verify` | Low-confidence observations and unclassified algorithms. Confirm before planning. |
+| `verify` | Low-confidence observations, unclassified algorithms, and confidentiality findings with no X supplied. Confirm before planning. |
 
 All three inputs vary per finding, and each says where it came from. Y is read from the
 finding's cheapest action class — `y_years_by_action_class` in the pack costs a config
@@ -294,8 +305,8 @@ editable: the effort figures in the pack, the lifetimes on the approval screen. 
 see which assumption produced the wave.
 
 Every input and every factor is stored on the row so an auditor can reconstruct any wave.
-Z is exposed as a slider: it is an assumption, and testing a plan against a sooner arrival
-is more honest than hardcoding one date.
+Z is exposed as a slider on the overview, beside the waves it moves: it is an assumption,
+and testing a plan against a sooner arrival is more honest than hardcoding one date.
 
 **Advisor** (§11) picks a replacement target by primitive plus family — RSA maps to ML-KEM
 for key exchange and ML-DSA for signatures — selects the parameter set from the data
@@ -308,7 +319,7 @@ guessed). A prerequisite nothing observed is not presumed met.
 
 ## Collectors
 
-All six of `SPEC.md` §7. The file collectors read only what approval put in scope; the
+All six of `SPECS/SPEC.md` §7. The file collectors read only what approval put in scope; the
 prober reaches only hosts the scan declared; the importer reads only what was uploaded.
 
 | Collector | Reads | `source_layer` |
@@ -333,7 +344,9 @@ Three properties are enforced in one place rather than trusted to each collector
 - **A collector that fails costs its own findings and nothing else.** The scan comes back
   `partial` naming the collector that died — or, when Semgrep runs out of memory on one
   file, keeps everything it found and still reports `partial` — rather than failing whole
-  or reporting `complete` over a hole.
+  or reporting `complete` over a hole. The same holds inside one certificate: if its
+  extensions cannot be decoded (a malformed SCT list, say), its key, signature and
+  validity findings are still reported and the reason is kept as `extensions_error`.
 - **A `partial` scan says what degraded.** Every run records, per collector, whether it
   ran at all, how many approved files it was handed, how many findings came back and the
   reason it stopped, plus approved files against findings *per extension*. It is stored on
@@ -358,12 +371,13 @@ Interactive documentation is at http://127.0.0.1:8000/docs when the backend is r
 
 | Endpoint | Does |
 |---|---|
+| `POST /api/uploads/image` | Raw body. One `docker save` tar (or OCI layout), streamed to disk under its own size cap. Returns the id a `docker_archive` scan names as its `source_ref`. |
 | `POST /api/scans` | Creates the scan, stamps the policy version, stages the source and enumerates it. Ends `awaiting_approval` — `probe_only` stages nothing and runs immediately. |
 | `POST /api/uploads` | Multipart. A folder picked in the browser, for a tree that is not on the machine running ECDAT: one `files` part per file plus a `paths` field holding the JSON array of relative paths. Returns `{upload_id, file_count, total_bytes}`; the scan that follows sends `source_type: "upload"` with that id as its `source_ref`. Stored, not read — nothing is parsed until paths are approved. Abandoned uploads are swept 24h later. |
 | `GET /api/scans` | Recent scans, newest first. |
 | `GET /api/scans/{id}` | The scan row. |
 | `GET /api/scans/{id}/files` | The surface scan as a nested tree with per-directory counts and sizes. Path and size only — nothing has been read. |
-| `POST /api/scans/{id}/approve` | The permission gate and the run it releases. Approval is set to *exactly* the submitted path list. Blocks until every collector has finished, then returns `complete` or `partial` with a per-collector breakdown and the analysis counts. |
+| `POST /api/scans/{id}/approve` | The permission gate and the run it releases. Body: `paths`, the scan-wide `data_lifetime_years`, and optional `file_lifetimes`. Approval is set to *exactly* the submitted path list. Blocks until every collector has finished, then returns `complete` or `partial` with a per-collector breakdown and the analysis counts. |
 
 ### Results
 
@@ -444,8 +458,8 @@ cd ../frontend && npm test                          # vitest — the file-select
 npm run typecheck && npm run build
 ```
 
-The suite runs on SQLite with no database server: 330-odd tests over every step, including
-the checks `SPEC.md` §16 requires — AES-256 and SHA-256 never quantum-vulnerable, RSA-4096
+The suite runs on SQLite with no database server: 488 tests over every step, including
+the checks `SPECS/SPEC.md` §16 requires — AES-256 and SHA-256 never quantum-vulnerable, RSA-4096
 quantum-vulnerable but not broken, RSA-1024 broken, signatures in wave 3 with no urgency,
 identity resolution, the prober's refusal, private keys never parsed, unapproved paths
 never opened, alignment skipped in `probe_only`, the exported CycloneDX validating against
@@ -454,8 +468,6 @@ the 1.6 schema, and an uncited policy entry refused.
 Some tests depend on the environment and skip with a message when it is absent:
 
 - the live-lab probes of `localhost:8443` and `8444` need the Docker demo running;
-- the compiled-binary demo test needs `demo/cbin/build/cryptodemo`, which the compose
-  stack produces (a committed copy under `backend/tests/data/` covers the collector itself);
 - the world-readable key-file test needs a POSIX file mode, which NTFS does not carry;
 - the PDF tests need WeasyPrint's native libraries.
 
@@ -466,20 +478,23 @@ The demo scan fixture does real Semgrep runs, so a full suite takes a few minute
 ```
 backend/
   app/
-    api/            scans.py (intake, CBOM, report)  findings.py (results)
+    api/            scans.py (intake, CBOM, report)  uploads.py (folder + image tar)  findings.py (results)
     collectors/     base, certs, config, code, binary, binary_yara (stub), network, cbom_import
-    core/           normalizer, alignment, policy, advisor, risk, policy_loader
+    core/           normalizer, alignment, policy, advisor, risk, policy_loader, visibility
     export/         cyclonedx.py, pdf.py, templates/report.html
-    intake/         stage (folder / git / image), surface (enumeration), selection (approval)
+    intake/         stage (folder / upload / git / image / archive), upload, surface, selection
     models/         the eight tables            schemas/   request and response bodies
     runner.py       one scan end to end         startup.py, config.py, db.py, main.py
   policy/           the five YAML files, read-only at runtime
   semgrep_rules/    crypto.yaml
   alembic/          migrations
   tests/            one module per step, plus committed fixtures under tests/data/
-frontend/           React + Vite + Tailwind + Recharts; src/pages holds the six screens
+frontend/           React + TypeScript + Vite; CSS modules over design tokens
+  src/pages/        the six screens          src/components/ui/  shared shell and components
+  docs/designs/     the screen mockups and TOKENS.md
 demo/               the deliberately weak targets and their compose file; demo/README.md
-SPEC.md             what to build         BUILD_PLAN.md   in what order
+SPECS/SPEC.md       what to build
+ECDAT_Pipeline.pdf  pipeline diagram         ecdat.pgerd   schema ERD
 ```
 
 ## Demo environment
@@ -496,8 +511,8 @@ quantum-vulnerable.
 | `weak-nginx` (8443) | TLS 1.0/1.1/1.2 with an `openssl.cnf` that declares a TLS 1.2 floor and is never activated — the drift demo |
 | `strong-nginx` (8444) | TLS 1.3 only, ECDSA P-256 — zero notes, still quantum-vulnerable |
 | `pyapp`, `javaapp` | MD5, SHA-1, RSA-1024, DES/3DES, ECB, hardcoded keys — the code-scan targets |
-| `oldssl`, `cbin` | OpenSSL 1.1.1 and a binary linked against it — what makes ML-KEM come back `blocked` |
-| `certs/` | RSA-1024 SHA-1, ECDSA, expiring, a PKCS#12 bundle — generated, never committed |
+| `oldssl`, `cbin` | OpenSSL 1.1.1 and a binary linked against it (committed) — what makes ML-KEM come back `blocked` |
+| `certs/` | RSA-1024 SHA-1, ECDSA, expiring, a PKCS#12 bundle — committed toy keys, regenerate with `gen_certs.sh --force` |
 | `sshd/sshd_config` | Weak SSH algorithm lists, with no live counterpart — must produce no drift note |
 | `sample_cbom.json` | A CycloneDX 1.6 inventory from a stand-in external tool — the import path |
 
@@ -551,7 +566,7 @@ queue touches no collector code.
 
 ## Build status
 
-Built one step at a time per `BUILD_PLAN.md`. All fourteen steps are done.
+Built one step at a time. All fourteen steps are done.
 
 | Step | Component |
 |---|---|
@@ -569,6 +584,18 @@ Built one step at a time per `BUILD_PLAN.md`. All fourteen steps are done.
 | 12 | CBOM import and CycloneDX 1.6 export |
 | 13 | React dashboard — six screens |
 | 14 | PDF report |
+
+Since then:
+
+- **Uploads** — browser folder upload and `docker save` tar upload as scan sources.
+- **Per-file X, per-action Y** — data lifetime moved to the approval screen with per-file
+  overrides; Y from `y_years_by_action_class`; Z moved to the overview; `x_source` /
+  `y_source` on every risk row.
+- **Collector diagnostics** — what a `partial` scan lost, per collector and per extension.
+- **Quantum-safe hiding** — `ECDAT_HIDE_QUANTUM_SAFE`.
+- **Dashboard redesign** — new shell, CSS modules over measured design tokens, explicit
+  empty/running/error states on every screen, grouped roadmap.
+- **Certificate resilience** — undecodable extensions no longer lose the certificate.
 
 ## Prior art
 
