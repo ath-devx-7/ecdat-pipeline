@@ -1,0 +1,129 @@
+/* ---- empty / error: a centred column in a full-height panel ---- */
+.frame {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.column {
+  max-width: var(--state-max-w);
+  margin: 0 auto;
+  padding: 72px var(--sp-4) var(--sp-8);
+}
+
+.tagLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.meta {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.title {
+  margin: 0 0 var(--sp-3);
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.body {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.body > * + * {
+  margin-top: var(--sp-3);
+}
+
+.log {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-3);
+  overflow-x: auto;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--text);
+  font: 400 var(--fs-xs) / 1.7 var(--font-mono);
+  white-space: pre;
+}
+
+.logPlain {
+  margin: var(--sp-3) 0 0;
+  color: var(--text);
+  font: 400 var(--fs-xs) / 1.7 var(--font-mono);
+  white-space: pre;
+}
+
+.nextSteps {
+  margin-top: var(--sp-4);
+}
+
+.nextSteps ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.75;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+/* ---- loading: a full-width block with a progress bar ---- */
+.loading {
+  padding: var(--sp-4);
+}
+
+.loadingFramed {
+  border: var(--bw) solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.loadingCallout {
+  border: var(--bw) solid var(--banner-info-border);
+  border-radius: var(--radius-sm);
+  background: var(--banner-info-bg);
+}
+
+.loadingHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.loadingTitle {
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.elapsed {
+  margin-left: auto;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.note {
+  margin-top: var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}

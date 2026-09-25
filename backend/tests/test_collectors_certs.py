@@ -285,3 +285,79 @@ def test_a_file_that_is_not_a_certificate_produces_nothing(scan_context) -> None
     ctx = scan_context({"app/main.py": "x = 1\n", "notes.txt": "no crypto here\n"})
 
     assert collect(ctx) == []
+
+
+# --------------------------------------------------------------------------- #
+# Extensions cryptography cannot decode
+# --------------------------------------------------------------------------- #
+
+
+def _with_malformed_sct_list() -> bytes:
+    """A certificate whose SCT list names signature algorithm 0 ("anonymous").
+
+    cryptography decodes every extension on first access to
+    ``certificate.extensions`` and raises ``ValueError`` on this one — the same
+    shape as badssl-sct-anonymous-sig.der in pyca/cryptography's test vectors.
+    """
+    sct = (
+        b"\x00"  # version v1
+        + b"\x11" * 32  # log id
+        + (0).to_bytes(8, "big")  # timestamp
+        + (0).to_bytes(2, "big")  # no extensions
+        + b"\x04\x00"  # hash sha256, signature algorithm 0 (anonymous)
+        + (0).to_bytes(2, "big")  # empty signature
+    )
+    sct_list = len(sct).to_bytes(2, "big") + sct
+    listing = (len(sct_list)).to_bytes(2, "big") + sct_list
+    octet_string = b"\x04" + bytes([len(listing)]) + listing
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "sct.example")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=800))
+        .add_extension(
+            x509.UnrecognizedExtension(
+                x509.ObjectIdentifier("1.3.6.1.4.1.11129.2.4.2"), octet_string
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    der = certificate.public_bytes(serialization.Encoding.DER)
+    # Guard the fixture itself: if a later cryptography accepts this, the test
+    # below would pass without exercising anything.
+    with pytest.raises(ValueError):
+        _ = x509.load_der_x509_certificate(der).extensions
+    return der
+
+
+def test_an_undecodable_extension_does_not_stop_the_collector(scan_context) -> None:
+    """The key and signature are still readable, and later files are still read."""
+    ctx = scan_context(
+        {
+            "pki/a-bad-sct.der": _with_malformed_sct_list(),
+            "pki/z-good.pem": _self_signed("good.example", days_valid=800),
+        }
+    )
+
+    findings = collect(ctx)
+
+    locations = {finding.evidence_location for finding in by_name(findings, "RSA")}
+    # PEM locations carry the line the block starts on; DER has none.
+    assert locations == {"pki/a-bad-sct.der", "pki/z-good.pem:1"}
+
+
+def test_an_undecodable_extension_is_recorded_not_hidden(scan_context) -> None:
+    ctx = scan_context({"pki/bad-sct.der": _with_malformed_sct_list()})
+
+    findings = collect(ctx)
+
+    key = by_name(findings, "RSA")[0]
+    assert key.evidence_raw["subject_alternative_names"] == []
+    assert "SCT" in key.evidence_raw["extensions_error"]

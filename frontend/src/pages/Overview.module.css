@@ -1,0 +1,271 @@
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+/* 766 : 391 at 1440px */
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 391px;
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* 417 : 333 inside the main column */
+.pair {
+  display: grid;
+  grid-template-columns: minmax(0, 417fr) minmax(0, 333fr);
+  gap: var(--sp-4);
+  align-items: stretch;
+}
+
+.panelBody {
+  padding: var(--sp-3);
+}
+
+.note {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.metaMono {
+  font-family: var(--font-mono);
+}
+
+.link {
+  color: var(--accent-link);
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+}
+
+/* key/value rows */
+.kv {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px var(--sp-3);
+  margin: var(--sp-3) 0 0;
+  padding-top: var(--sp-3);
+  border-top: var(--bw) solid var(--divider);
+  font-size: var(--fs-xs);
+}
+
+.kv dt {
+  color: var(--text-2);
+}
+
+.kv dd {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+/* ---- Mosca ---- */
+.moscaRows {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 8px 10px;
+  font-size: var(--fs-xs);
+}
+
+.moscaLetter {
+  color: var(--text);
+  font: 600 var(--fs-xs) / 1.4 var(--font-mono);
+}
+
+.moscaLabel {
+  color: var(--text);
+}
+
+.moscaSub {
+  color: var(--text-2);
+}
+
+.moscaValue {
+  color: var(--text);
+  font-family: var(--font-mono);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.slider {
+  width: 100%;
+  margin: var(--sp-2) 0 0;
+  accent-color: var(--accent);
+}
+
+.timeline {
+  margin-top: var(--sp-3);
+}
+
+.lane {
+  position: relative;
+  height: 16px;
+  margin-bottom: 8px;
+}
+
+.seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  overflow: hidden;
+  font: 400 var(--fs-2xs) / 1 var(--font-mono);
+  white-space: nowrap;
+}
+
+.segY {
+  background: var(--mosca-y);
+  color: #fff;
+}
+
+.segX {
+  background: var(--mosca-x);
+  color: var(--text);
+}
+
+.segZ {
+  background: var(--mosca-z);
+  color: var(--text-2);
+}
+
+.segExposed {
+  border: var(--bw) solid var(--mosca-exposed-border);
+  background: var(--mosca-exposed-bg);
+  color: var(--sev-critical-fg);
+  font-family: var(--font-sans);
+}
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 4px;
+  border-top: var(--bw) solid var(--axis);
+  color: var(--text-2);
+  font: 400 var(--fs-2xs) / 1 var(--font-mono);
+}
+
+.risk {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: var(--bw) solid var(--divider);
+}
+
+.riskNumber {
+  margin-top: 4px;
+  color: var(--text);
+  font: 500 var(--fs-kpi) / 1.1 var(--font-mono);
+}
+
+.riskText {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* ---- exports ---- */
+.exports {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.export {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--sp-3);
+  padding: 10px var(--sp-3);
+  border-bottom: var(--bw) solid var(--divider);
+}
+
+.export:last-child {
+  border-bottom: 0;
+}
+
+.exportName {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.exportAction {
+  color: var(--accent-link);
+  font-size: var(--fs-xs);
+  text-align: right;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.exportDetail {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--text-2);
+  font: 400 var(--fs-xs) / 1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exportNote {
+  grid-column: 1 / -1;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.hiddenInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* recommendation statuses */
+.statuses {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px var(--sp-3);
+  padding: 8px var(--sp-3);
+  border-bottom: var(--bw) solid var(--divider);
+}
+
+.status:last-child {
+  border-bottom: 0;
+}
+
+.statusCount {
+  color: var(--text);
+  font: 500 var(--fs-sm) / 1.4 var(--font-mono);
+  text-align: right;
+}
+
+.statusText {
+  grid-column: 1 / -1;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}

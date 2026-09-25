@@ -1,0 +1,103 @@
+.wrap {
+  min-width: 0;
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--fs-sm);
+}
+
+.th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: var(--row-h);
+  padding: 0 var(--sp-3);
+  border-bottom: var(--bw) solid var(--border-subtle);
+  background: var(--surface-sunken);
+  color: var(--text-3);
+  font: 600 var(--fs-2xs) / 1.2 var(--font-sans);
+  letter-spacing: var(--caps-tracking);
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.sorted {
+  color: var(--text);
+}
+
+.td {
+  height: var(--row-h);
+  padding: 0 var(--sp-3);
+  overflow: hidden;
+  border-bottom: var(--bw) solid var(--divider);
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wrapCells .td {
+  padding-block: 6px;
+  white-space: normal;
+}
+
+.right {
+  text-align: right;
+}
+
+.right > [aria-hidden="true"] {
+  margin-left: auto;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.row {
+  background: var(--surface);
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  background: var(--accent-hover);
+}
+
+.selected,
+.selected:hover {
+  background: var(--accent-select);
+}
+
+.section > td {
+  height: var(--row-h);
+  padding: 0 var(--sp-3);
+  border-bottom: var(--bw) solid var(--divider);
+  background: var(--canvas);
+  font-size: var(--fs-xs);
+}
+
+.emptyCell {
+  padding: 0;
+  border: 0;
+}

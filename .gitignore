@@ -1,6 +1,6 @@
 CLAUDE.md
 BUILD_PLAN.md
-SPECS/
+# SPECS/
 ERD.md
 final_changes.txt
 
@@ -22,8 +22,9 @@ notes/
 # and a key in a git history is a real incident even when the key is a toy;
 # the ELF is a build output. Both are reproducible from demo/gen_certs.sh and
 # demo/cbin/Makefile.
-demo/certs/
-demo/cbin/build/
+
+# demo/certs/
+# demo/cbin/build/
 
 # Coverage data from pytest-cov
 .coverage

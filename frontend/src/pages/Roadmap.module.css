@@ -1,0 +1,251 @@
+/* five wave cards + the blocking-prerequisites card */
+.cards {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) minmax(0, 1.7fr);
+  gap: var(--sp-2);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: var(--sp-3);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.cardSquare {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  align-self: center;
+  background: var(--tone-solid);
+}
+
+.cardTitle {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.cardCount {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cardNumber {
+  color: var(--text);
+  font: 500 20px / 1.2 var(--font-mono);
+}
+
+.cardSub {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.blockers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+}
+
+.blockers li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  padding: 2px 0;
+}
+
+.blockerText {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blockerCount {
+  color: var(--accent-link);
+  font-family: var(--font-mono);
+}
+
+.tablePanel {
+  flex: 1;
+  min-height: 0;
+}
+
+/* the panel body and the table inside it both take the remaining height,
+   so the rows scroll inside the panel and the header row stays put */
+.tableBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.table {
+  flex: 1;
+  min-height: 0;
+}
+
+.footnote {
+  flex: none;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+/* group (wave) rows */
+.group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+}
+
+.groupToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: 600 var(--fs-sm) / 1 var(--font-sans);
+  cursor: pointer;
+}
+
+.groupMeta {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.groupNote {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* cells */
+.num {
+  color: var(--text-2);
+  font: 400 var(--fs-xs) / 1 var(--font-mono);
+}
+
+.asset {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.assetName {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assetLoc,
+.sub {
+  overflow: hidden;
+  color: var(--text-2);
+  font: 400 var(--fs-2xs) / 1.35 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subSans {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  overflow: hidden;
+  color: var(--text);
+  font: 400 var(--fs-xs) / 1.35 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.target {
+  overflow: hidden;
+  color: var(--accent-ink);
+  font: 400 var(--fs-xs) / 1.35 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mosca {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.moscaValue {
+  color: var(--text);
+  font: 500 var(--fs-sm) / 1.35 var(--font-mono);
+}
+
+.effort {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 6px;
+  overflow: hidden;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: 400 var(--fs-2xs) / 1.5 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.refs {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  font: 400 var(--fs-2xs) / 1.4 var(--font-mono);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+.skeletonCard {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}

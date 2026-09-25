@@ -1,19 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { api, zStorageKey, type Overview as OverviewData } from "../api";
-import { VerdictChart, WaveChart } from "../components/Charts";
-import { ScanCoverage } from "../components/ScanCoverage";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { api, ApiError, zStorageKey, type Overview as OverviewData, type Scan } from "../api";
+import { PageBody, PageHeader, shortId } from "../components/ui/AppShell";
+import { BarList, StackedBar } from "../components/ui/Bars";
+import { DataTable } from "../components/ui/DataTable";
+import { Icon } from "../components/ui/Icon";
+import { Banner, buttonClass, Caps, KpiTile, Panel, SeverityBadge } from "../components/ui/primitives";
+import { StatePanel } from "../components/ui/StatePanel";
 import {
-  STATUS_BADGE,
+  SCAN_STATUS_LABEL,
   STATUS_DESCRIPTION,
   STATUS_LABEL,
+  STATUS_TONE,
   STATUSES,
   titleCase,
+  VERDICT_LABEL,
+  VERDICT_TONE,
+  VERDICTS,
+  WAVE_LABEL,
+  WAVE_TONE,
+  WAVES,
+  scanLabel,
 } from "../lib/labels";
+import s from "./Overview.module.css";
 
 // §13 screen 3. The readiness number is shown with its denominator and the
 // unassessed count beside it; the four recommendation statuses are always four
-// tiles; and the Z slider re-scores the scan live, because Z is an assumption.
+// rows; and the Z slider re-scores the scan live, because Z is an assumption.
 
 // Z is an assumption about the world rather than a fact about this scan, so it
 // is answered here, beside the waves it moves and the report that carries them
@@ -22,10 +35,22 @@ import {
 // that only holds if the machine is late is not a plan.
 const DEFAULT_Z = 5;
 
+const pct = (part: number, whole: number) => (whole ? Math.round((part / whole) * 100) : 0);
+
+function duration(fromIso: string | null, toIso: string | null): string | null {
+  if (!fromIso || !toIso) return null;
+  const total = Math.max(0, Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 1000));
+  const m = Math.floor(total / 60);
+  return m ? `${m}m ${total % 60}s` : `${total}s`;
+}
+
 export default function Overview() {
   const { scanId = "" } = useParams();
+  const navigate = useNavigate();
   const [data, setData] = useState<OverviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [recent, setRecent] = useState<Scan[] | null>(null);
   const [z, setZ] = useState<number | null>(null);
   const [rescoring, setRescoring] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
@@ -53,7 +78,14 @@ export default function Overview() {
         }
         setZ(wanted);
       })
-      .catch((err) => setError(err.message));
+      .catch((err) => {
+        // No such scan is the "nothing loaded" screen, not an error: offer
+        // the scans that do exist.
+        if (err instanceof ApiError && err.status === 404) {
+          setMissing(true);
+          api.scans().then(setRecent).catch(() => setRecent([]));
+        } else setError(err.message);
+      });
   }, [scanId, load]);
 
   function onZ(value: number) {
@@ -91,230 +123,487 @@ export default function Overview() {
     }
   }
 
-  if (error) return <div className="card text-sm text-red-800">{error}</div>;
-  if (!data) return <div className="text-sm text-slate-500">Loading…</div>;
+  // ---- empty: no such scan ----
+  if (missing) {
+    const finished = (recent ?? []).filter(
+      (scan) => scan.status === "complete" || scan.status === "partial" || scan.status === "failed",
+    );
+    return (
+      <>
+        <PageHeader title="Overview" subtitle="Summary of a completed scan." />
+        <PageBody>
+          <StatePanel
+            variant="empty"
+            title="No scan loaded"
+            actions={
+              <Link to="/" className={buttonClass("primary")}>
+                New scan
+              </Link>
+            }
+          >
+            <p>
+              The overview summarises one completed scan: finding counts, verdict mix, Mosca risk and exports. Open a
+              recent scan or configure a new one.
+            </p>
+            {finished.length > 0 && (
+              <div style={{ border: "var(--bw) solid var(--border)", borderRadius: "var(--radius-sm)" }}>
+                <DataTable
+                  rowKey={(scan) => scan.id}
+                  rows={finished.slice(0, 8)}
+                  onRowClick={(scan) => navigate(`/scans/${scan.id}`)}
+                  columns={[
+                    { key: "id", header: "ID", width: 90, mono: true, render: (scan) => shortId(scan.id) },
+                    { key: "target", header: "Target", render: (scan) => scanLabel(scan) },
+                    {
+                      key: "finished",
+                      header: "Finished",
+                      width: 120,
+                      mono: true,
+                      render: (scan) => scan.completed_at?.slice(5, 16).replace("T", " ") ?? "–",
+                    },
+                  ]}
+                />
+              </div>
+            )}
+          </StatePanel>
+        </PageBody>
+      </>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <>
+        <PageHeader title="Overview" subtitle="Summary of a completed scan." />
+        <PageBody>
+          <StatePanel variant="error" tag="Overview unavailable" meta={shortId(scanId)} title="The overview could not be loaded" log={[error]} />
+        </PageBody>
+      </>
+    );
+  }
+
+  if (!data) {
+    return (
+      <>
+        <PageHeader title="Overview" subtitle="Loading…" />
+        <PageBody>
+          <StatePanel variant="loading" appearance="panel" title="Loading overview" meta={shortId(scanId)} />
+        </PageBody>
+      </>
+    );
+  }
 
   const { scan, readiness, policy } = data;
 
-  return (
-    <div className="space-y-4">
-      <div className="card flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <h1 className="text-xl font-semibold">
-          {scan.source_ref ?? scan.probe_targets?.map((t) => `${t.host}:${t.port}`).join(", ")}
-        </h1>
-        <span className="text-sm text-slate-600">
-          {titleCase(scan.mode)} · <StatusWord status={scan.status} /> · {data.finding_count} findings
-          {scan.data_lifetime_years !== null && (
-            <> · X = {scan.data_lifetime_years} years by default, per file on the approval screen</>
-          )}
-        </span>
-        <div className="ml-auto flex items-center gap-2 text-sm">
-          <a className="btn" href={api.reportUrl(scanId)}>
-            PDF report
-          </a>
-          <a className="btn-secondary" href={api.reportHtmlUrl(scanId)} target="_blank" rel="noreferrer">
-            HTML
-          </a>
-          <a className="btn-secondary" href={api.cbomUrl(scanId)}>
-            Export CycloneDX
-          </a>
-          <label className="btn-secondary cursor-pointer">
-            Import CBOM
-            <input
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              onChange={(e) => onImport(e.target.files?.[0])}
-            />
-          </label>
-        </div>
-        {importing && <div className="w-full text-xs text-slate-600">{importing}</div>}
-        <ScanCoverage status={scan.status} diagnostics={scan.diagnostics} />
-      </div>
+  // ---- not analysed yet ----
+  if (scan.status === "staging" || scan.status === "awaiting_approval") {
+    return (
+      <>
+        <PageHeader title="Overview" subtitle="Analysis has not started." />
+        <PageBody>
+          <StatePanel
+            variant="empty"
+            tag={SCAN_STATUS_LABEL[scan.status]}
+            tagTone="high"
+            meta={shortId(scan.id)}
+            title="Nothing has been analysed yet"
+            actions={
+              <Link to={`/scans/${scan.id}/files`} className={buttonClass("primary")}>
+                Review files
+              </Link>
+            }
+          >
+            Collectors run only over files you approve. Charts, the risk picture and exports appear once analysis has
+            finished.
+          </StatePanel>
+        </PageBody>
+      </>
+    );
+  }
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <div className="card md:col-span-1">
-          <div className="label">PQC readiness</div>
-          <div className="text-4xl font-bold">
-            {readiness.percent === null ? "—" : `${readiness.percent}%`}
+  // ---- analysis running ----
+  if (scan.status === "running") {
+    return (
+      <>
+        <PageHeader title="Overview" subtitle={`Analysis in progress — ${scan.approved_count.toLocaleString("en-US")} approved files.`} />
+        <PageBody>
+          <StatePanel variant="loading" appearance="panel" title="Analysis running" meta={shortId(scan.id)}>
+            Collectors are running over the approved paths only. Charts and the risk picture appear when every collector
+            has finished; reload this page then.
+          </StatePanel>
+        </PageBody>
+      </>
+    );
+  }
+
+  // ---- populated / completed with errors ----
+  const total = data.finding_count;
+  const targets = scan.probe_targets?.length ?? 0;
+  const counts = data.verdict_counts;
+  const zUsed = data.z_years_used ?? z ?? policy.z_years_default;
+  const x = scan.data_lifetime_years;
+  const y = policy.y_years_default;
+  const recTotal = STATUSES.reduce((sum, status) => sum + (data.recommendation_counts[status] ?? 0), 0);
+  const ran = new Set(scan.diagnostics?.collectors.filter((run) => run.ran).map((run) => run.name) ?? []);
+  const notRun = scan.diagnostics?.collectors.filter((run) => !run.ran).map((run) => run.name) ?? [];
+  const took = duration(scan.created_at, scan.completed_at);
+
+  const subtitle = [
+    scan.mode !== "probe_only" && `${scan.approved_count.toLocaleString("en-US")} files analysed`,
+    targets > 0 && `${targets} endpoint${targets === 1 ? "" : "s"} probed`,
+    `policy ${scan.policy_version ?? policy.version}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <>
+      <PageHeader
+        title="Overview"
+        subtitle={subtitle}
+        actions={
+          <>
+            <a className={buttonClass("primary")} href={api.cbomUrl(scanId)}>
+              <Icon name="download" size={14} />
+              CycloneDX 1.6 CBOM
+            </a>
+            <a className={buttonClass("secondary")} href={api.reportUrl(scanId)}>
+              PDF report
+            </a>
+            <a className={buttonClass("secondary")} href={api.reportHtmlUrl(scanId)} target="_blank" rel="noreferrer">
+              HTML report
+            </a>
+          </>
+        }
+      />
+      <PageBody>
+        {scan.policy_version && scan.policy_version !== policy.version && (
+          <Banner tone="warn" title={`Scanned under pack ${scan.policy_version}`}>
+            Verdicts were re-computed under {policy.version}.
+          </Banner>
+        )}
+        {error && <Banner tone="error" title="Re-scoring failed">{error}</Banner>}
+
+        <div className={s.kpis}>
+          <KpiTile label="Total findings" value={total} sub={`${readiness.assessed} assessed · ${readiness.unassessed} unassessed`} />
+          <KpiTile
+            label="Quantum-vulnerable"
+            tone="high"
+            value={counts.quantum_vulnerable ?? 0}
+            sub={`${pct(counts.quantum_vulnerable ?? 0, total)}% · breakable by a quantum computer`}
+          />
+          <KpiTile label="Classically weak" tone="critical" value={counts.broken_now ?? 0} sub="fix now — no PQC dependency" />
+          <KpiTile
+            label="PQC-ready"
+            tone="safe"
+            value={readiness.quantum_safe}
+            sub={readiness.percent === null ? "readiness not assessed" : `${readiness.percent}% PQC readiness`}
+          />
+          <KpiTile label="Unknown" tone="unknown" value={counts.unknown ?? 0} sub="not assessed — neither safe nor vulnerable" />
+          <KpiTile label="Blocked recs" tone="blocked" value={data.recommendation_counts.blocked ?? 0} sub={`of ${recTotal} recommendations`} />
+        </div>
+
+        <div className={s.grid}>
+          <div className={s.col}>
+            <Panel title="Findings by verdict" meta={<span className={s.metaMono}>n = {total}</span>}>
+              <StackedBar
+                parts={VERDICTS.filter((verdict) => verdict in counts).map((verdict) => ({
+                  key: verdict,
+                  label: VERDICT_LABEL[verdict],
+                  count: counts[verdict] ?? 0,
+                  tone: VERDICT_TONE[verdict],
+                }))}
+              />
+              <p className={s.note}>
+                Broken-now and quantum-vulnerable are independent classifications, not two points on one scale.
+              </p>
+            </Panel>
+
+            <div className={s.pair}>
+              <Panel title="By primitive" meta="findings per use">
+                <BarList
+                  labelWidth={120}
+                  rows={Object.entries(data.primitive_counts)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([name, count]) => ({ key: name, label: titleCase(name), value: count }))}
+                />
+              </Panel>
+
+              <Panel title="By source collector">
+                <BarList
+                  labelWidth={110}
+                  rows={[
+                    ...Object.entries(data.collector_counts)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([name, count]) => ({ key: name, label: titleCase(name), value: count })),
+                    ...notRun
+                      .filter((name) => !(name in data.collector_counts) && !ran.has(name))
+                      .map((name) => ({ key: name, label: titleCase(name), value: null, valueText: "off" })),
+                  ]}
+                />
+                <dl className={s.kv}>
+                  {scan.mode !== "probe_only" && (
+                    <>
+                      <dt>Files analysed</dt>
+                      <dd>{scan.approved_count.toLocaleString("en-US")}</dd>
+                    </>
+                  )}
+                  {targets > 0 && (
+                    <>
+                      <dt>Endpoints probed</dt>
+                      <dd>{targets}</dd>
+                    </>
+                  )}
+                  <dt>
+                    <Link to={`/scans/${scanId}/drift`} className={s.link}>
+                      Drift notes
+                    </Link>
+                  </dt>
+                  <dd>
+                    {data.alignment.status === "skipped"
+                      ? "skipped"
+                      : `${data.alignment.note_count} / ${data.alignment.compared_services.length} services`}
+                  </dd>
+                  {Object.entries(data.source_layer_counts).map(([layer, count]) => (
+                    <FragmentKv key={layer} label={`${titleCase(layer)} layer`} value={count} />
+                  ))}
+                  {took && (
+                    <>
+                      <dt>Analysis time</dt>
+                      <dd>{took}</dd>
+                    </>
+                  )}
+                </dl>
+              </Panel>
+            </div>
+
+            <div className={s.pair}>
+              <Panel
+                title="Migration waves"
+                meta={
+                  <Link to={`/scans/${scanId}/roadmap`} className={s.link}>
+                    Open roadmap
+                  </Link>
+                }
+              >
+                <BarList
+                  labelWidth={190}
+                  rows={WAVES.map((wave) => ({
+                    key: wave,
+                    label: WAVE_LABEL[wave],
+                    value: data.wave_counts[wave] ?? 0,
+                    tone: WAVE_TONE[wave],
+                  }))}
+                />
+              </Panel>
+
+              <Panel title="Recommendations" meta={`${recTotal} total`} flush>
+                <ul className={s.statuses}>
+                  {STATUSES.map((status) => (
+                    <li key={status} className={s.status}>
+                      <SeverityBadge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</SeverityBadge>
+                      <span className={s.statusCount}>{data.recommendation_counts[status] ?? 0}</span>
+                      <span className={s.statusText}>{STATUS_DESCRIPTION[status]}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Panel>
+            </div>
           </div>
-          <div className="mt-1 text-xs text-slate-600">
-            {readiness.assessed} findings assessed
-            <br />
-            {readiness.quantum_vulnerable} quantum-vulnerable · {readiness.broken_now} broken now
-          </div>
-          <div className="mt-2 text-xs text-slate-500">
-            <strong>{readiness.unassessed} unassessed</strong> findings are not in this number. Not
-            assessed is neither safe nor vulnerable.
+
+          <div className={s.col}>
+            <Panel title="Mosca risk · X + Y vs Z" meta={rescoring ? "re-scoring…" : undefined}>
+              <MoscaPanel
+                x={x}
+                y={y}
+                z={z ?? zUsed}
+                onZ={onZ}
+                packZ={policy.z_years_default}
+                subject={data.mosca.subject}
+                overdue={data.mosca.overdue}
+                unknownPrimitive={data.mosca.unknown_primitive}
+                zUsed={zUsed}
+              />
+            </Panel>
+
+            <Panel title="Exports" flush>
+              <ul className={s.exports}>
+                <li className={s.export}>
+                  <span className={s.exportName}>CycloneDX 1.6 CBOM</span>
+                  <a className={s.exportAction} href={api.cbomUrl(scanId)}>
+                    Download
+                  </a>
+                  <span className={s.exportDetail}>{api.cbomUrl(scanId)}</span>
+                </li>
+                <li className={s.export}>
+                  <span className={s.exportName}>PDF report</span>
+                  <a className={s.exportAction} href={api.reportUrl(scanId)}>
+                    Download
+                  </a>
+                  <span className={s.exportDetail}>{api.reportUrl(scanId)}</span>
+                </li>
+                <li className={s.export}>
+                  <span className={s.exportName}>HTML report</span>
+                  <a className={s.exportAction} href={api.reportHtmlUrl(scanId)} target="_blank" rel="noreferrer">
+                    Open
+                  </a>
+                  <span className={s.exportDetail}>{api.reportHtmlUrl(scanId)} · single file</span>
+                </li>
+                <li className={s.export}>
+                  <span className={s.exportName}>Import CycloneDX CBOM</span>
+                  <label className={s.exportAction}>
+                    Choose file…
+                    <input
+                      type="file"
+                      accept=".json,application/json"
+                      className={s.hiddenInput}
+                      onChange={(e) => onImport(e.target.files?.[0])}
+                    />
+                  </label>
+                  <span className={s.exportNote}>
+                    {importing ??
+                      "Another tool's CycloneDX 1.6 inventory becomes findings here, classified like the native ones."}
+                    {data.provenance_count > 0 &&
+                      ` ${data.provenance_count} imported CBOM${data.provenance_count === 1 ? "" : "s"} kept as provenance.`}
+                  </span>
+                </li>
+              </ul>
+            </Panel>
           </div>
         </div>
-        <div className="card md:col-span-3">
-          <div className="label">Recommendations — all four statuses</div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {STATUSES.map((status) => (
-              <div key={status} className="rounded-md border border-slate-200 p-2">
-                <span className={`badge ${STATUS_BADGE[status]}`}>{STATUS_LABEL[status]}</span>
-                <div className="mt-1 text-2xl font-semibold">{data.recommendation_counts[status] ?? 0}</div>
-                <div className="text-xs text-slate-500">{STATUS_DESCRIPTION[status]}</div>
-              </div>
+      </PageBody>
+    </>
+  );
+}
+
+function FragmentKv({ label, value }: { label: string; value: number }) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </>
+  );
+}
+
+// X + Y against Z, at the scan-wide defaults. Each finding crosses at its own
+// X + Y, so the overdue count — from the backend — is what decides; the bars
+// only show what the defaults imply.
+function MoscaPanel({
+  x,
+  y,
+  z,
+  onZ,
+  packZ,
+  subject,
+  overdue,
+  unknownPrimitive,
+  zUsed,
+}: {
+  x: number | null;
+  y: number;
+  z: number;
+  onZ: (value: number) => void;
+  packZ: number;
+  subject: number;
+  overdue: number;
+  unknownPrimitive: number;
+  zUsed: number;
+}) {
+  const year = new Date().getFullYear();
+  const need = (x ?? 0) + y;
+  const span = Math.max(10, Math.ceil((Math.max(need, z) * 1.2) / 5) * 5);
+  const at = (years: number) => `${(years / span) * 100}%`;
+  const ticks = Array.from({ length: 6 }, (_, i) => year + Math.round((span / 5) * i));
+
+  return (
+    <>
+      <div className={s.moscaRows}>
+        <span className={s.moscaLetter}>X</span>
+        <span>
+          <span className={s.moscaLabel}>Data shelf life</span>
+          <span className={s.moscaSub}> · scan default, per file on approval</span>
+        </span>
+        <span className={s.moscaValue}>{x === null ? "per file" : `${x} y`}</span>
+
+        <span className={s.moscaLetter}>Y</span>
+        <span>
+          <span className={s.moscaLabel}>Migration time</span>
+          <span className={s.moscaSub}> · policy default, per finding</span>
+        </span>
+        <span className={s.moscaValue}>{y} y</span>
+
+        <span className={s.moscaLetter}>Z</span>
+        <span>
+          <span className={s.moscaLabel}>Time to CRQC</span>
+          <span className={s.moscaSub}> · assumption, pack says {packZ}</span>
+        </span>
+        <span className={s.moscaValue}>{z} y</span>
+      </div>
+      <input
+        type="range"
+        className={s.slider}
+        min={1}
+        max={40}
+        value={z}
+        onChange={(e) => onZ(Number(e.target.value))}
+        aria-label="Z — years until a quantum computer"
+      />
+
+      {x !== null && (
+        <div className={s.timeline} aria-hidden="true">
+          <div className={s.lane}>
+            <span className={`${s.seg} ${s.segY}`} style={{ left: 0, width: at(y) }}>
+              Y {y}
+            </span>
+            <span className={`${s.seg} ${s.segX}`} style={{ left: at(y), width: at(x) }}>
+              X {x}
+            </span>
+          </div>
+          <div className={s.lane}>
+            <span className={`${s.seg} ${s.segZ}`} style={{ left: 0, width: at(z) }}>
+              Z {z}
+            </span>
+            {need > z && (
+              <span className={`${s.seg} ${s.segExposed}`} style={{ left: at(z), width: at(need - z) }}>
+                Exposed {need - z} y
+              </span>
+            )}
+          </div>
+          <div className={s.axis}>
+            {ticks.map((tick) => (
+              <span key={tick}>{tick}</span>
             ))}
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="card">
-          <div className="label">Verdicts</div>
-          <VerdictChart counts={data.verdict_counts} />
-          <p className="text-xs text-slate-500">
-            Broken-now and quantum-vulnerable are independent classifications, not two points on one
-            scale. RSA-4096 is secure today and vulnerable tomorrow; MD5 is broken today and irrelevant
-            to quantum.
-          </p>
+      <div className={s.risk}>
+        <div>
+          <Caps>Overdue</Caps>
+          <div className={s.riskNumber}>{subject > 0 ? overdue : "—"}</div>
         </div>
-        <div className="card">
-          <div className="flex items-baseline justify-between">
-            <div className="label">Migration waves</div>
-            <Link to={`/scans/${scanId}/roadmap`} className="text-xs underline">
-              Roadmap
-            </Link>
-          </div>
-          <WaveChart counts={data.wave_counts} />
-          <div className="mt-2">
-            <label className="label" htmlFor="z">
-              Z — years until a quantum computer: <span className="text-slate-900">{z ?? "…"}</span>
-              {rescoring && <span className="ml-2 font-normal normal-case text-slate-500">re-scoring…</span>}
-            </label>
-            <input
-              id="z"
-              type="range"
-              min={1}
-              max={40}
-              value={z ?? policy.z_years_default}
-              onChange={(e) => onZ(Number(e.target.value))}
-              className="w-full"
-            />
-            <p className="text-xs text-slate-500">
-              Mosca: (X + Y) − Z &gt; 0 means overdue. X is per file, from the approval screen; Y is
-              each finding's own migration effort, from the pack ({policy.y_years_default} by
-              default). Z starts at {DEFAULT_Z} and is an assumption, not a measurement — the pack's
-              own figure is {policy.z_years_default}. Only quantum-vulnerable key exchanges and
-              ciphers move with Z; wave 0 does not, because broken today is not a quantum deadline.
-            </p>
-            {data.mosca.subject > 0 ? (
-              <p className="mt-1 text-xs text-slate-700">
-                <strong>{data.mosca.subject}</strong> finding{data.mosca.subject === 1 ? "" : "s"} subject to
-                Mosca here; <strong>{data.mosca.overdue}</strong> overdue at Z = {data.z_years_used ?? z}.
-                Each finding crosses at its own X + Y, so they do not all move together — the
-                per-row values are on the findings and roadmap screens.
-              </p>
-            ) : (
-              <p className="mt-1 rounded bg-slate-100 p-2 text-xs text-slate-700">
-                <strong>Nothing in this scan moves with Z.</strong> It has no quantum-vulnerable key
-                exchange or cipher findings, so Mosca's inequality has nothing to apply to.
-                {data.mosca.unknown_primitive > 0 && (
-                  <>
-                    {" "}{data.mosca.unknown_primitive} quantum-vulnerable finding
-                    {data.mosca.unknown_primitive === 1 ? "" : "s"} of unknown use sit in Verify:
-                    confirm what those keys are for and Mosca can be evaluated.
-                  </>
-                )}
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="card">
-          <div className="flex items-baseline justify-between">
-            <div className="label">Drift</div>
-            <Link to={`/scans/${scanId}/drift`} className="text-xs underline">
-              Details
-            </Link>
-          </div>
-          {data.alignment.status === "skipped" ? (
-            <p className="text-sm">
-              <span className="badge bg-slate-200 text-slate-700">Skipped</span>{" "}
-              <span className="text-slate-600">{data.alignment.reason}</span>
-            </p>
-          ) : (
-            <p className="text-sm">
-              <span className={`badge ${data.alignment.note_count ? "bg-amber-100 text-amber-800" : "bg-green-100 text-green-800"}`}>
-                {data.alignment.note_count} note{data.alignment.note_count === 1 ? "" : "s"}
-              </span>{" "}
-              <span className="text-slate-600">
-                over {data.alignment.compared_services.length} probed service
-                {data.alignment.compared_services.length === 1 ? "" : "s"}
+        <div className={s.riskText}>
+          {subject > 0 ? (
+            <>
+              <span>
+                <SeverityBadge tone={overdue > 0 ? "critical" : "safe"} marker={false}>
+                  {overdue > 0 ? "Overdue · X + Y > Z" : "Not overdue · X + Y ≤ Z"}
+                </SeverityBadge>
               </span>
-            </p>
+              <span>
+                {overdue} of {subject} finding{subject === 1 ? "" : "s"} subject to Mosca at Z = {zUsed}. Only
+                quantum-vulnerable key exchanges and ciphers move with Z.
+              </span>
+            </>
+          ) : (
+            <span>
+              Nothing in this scan moves with Z: it has no quantum-vulnerable key exchange or cipher findings.
+              {unknownPrimitive > 0 &&
+                ` ${unknownPrimitive} quantum-vulnerable finding${unknownPrimitive === 1 ? "" : "s"} of unknown use sit in Verify.`}
+            </span>
           )}
         </div>
-        <div className="card">
-          <div className="label">Where findings came from</div>
-          <CountList counts={data.collector_counts} />
-          <div className="label mt-3">Source layers</div>
-          <CountList counts={data.source_layer_counts} />
-        </div>
-        <div className="card">
-          <div className="label">Policy pack</div>
-          <div className="text-sm">
-            <div>
-              <strong>{policy.version}</strong> · published {policy.published} · {policy.age_days} days old
-            </div>
-            <div className="text-slate-600">
-              {policy.algorithm_rule_count} verdict rules · {policy.pqc_target_count} migration targets ·
-              hybrid {policy.prefer_hybrid ? "preferred" : "not preferred"}
-            </div>
-            {policy.stale ? (
-              <div className="mt-1 rounded bg-amber-50 p-1 text-xs text-amber-900">
-                Older than {policy.staleness_warning_days} days — carry in a newer pack.
-              </div>
-            ) : (
-              <div className="mt-1 text-xs text-slate-500">
-                Within the {policy.staleness_warning_days}-day staleness window.
-              </div>
-            )}
-            {scan.policy_version && scan.policy_version !== policy.version && (
-              <div className="mt-1 text-xs text-amber-900">
-                Scanned under pack {scan.policy_version}; verdicts were re-computed under {policy.version}.
-              </div>
-            )}
-            {data.provenance_count > 0 && (
-              <div className="mt-1 text-xs text-slate-500">
-                {data.provenance_count} imported CBOM{data.provenance_count === 1 ? "" : "s"} kept as provenance.
-              </div>
-            )}
-          </div>
-        </div>
       </div>
-    </div>
+    </>
   );
-}
-
-function CountList({ counts }: { counts: Record<string, number> }) {
-  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0) return <p className="text-xs text-slate-500">none</p>;
-  return (
-    <ul className="text-sm">
-      {entries.map(([name, count]) => (
-        <li key={name} className="flex justify-between">
-          <span>{titleCase(name)}</span>
-          <span className="font-mono text-xs">{count}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-export function StatusWord({ status }: { status: string }) {
-  const tone =
-    status === "complete"
-      ? "text-green-700"
-      : status === "partial"
-        ? "text-amber-700"
-        : status === "failed"
-          ? "text-red-700"
-          : "text-slate-700";
-  return <span className={`font-medium ${tone}`}>{titleCase(status)}</span>;
 }

@@ -316,22 +316,43 @@ def _certificate_findings(
 
 def _certificate_identity(certificate: x509.Certificate) -> dict[str, Any]:
     """The shared evidence block. Every finding from one certificate carries it."""
-    return {
+    extensions, extensions_error = _extensions(certificate)
+    identity: dict[str, Any] = {
         "subject": certificate.subject.rfc4514_string(),
         "issuer": certificate.issuer.rfc4514_string(),
         "serial_number": format(certificate.serial_number, "x"),
         "not_valid_before": certificate.not_valid_before_utc.isoformat(),
         "not_valid_after": certificate.not_valid_after_utc.isoformat(),
         "self_signed": certificate.issuer == certificate.subject,
-        "subject_alternative_names": _subject_alternative_names(certificate),
+        "subject_alternative_names": _subject_alternative_names(extensions),
     }
+    if extensions_error is not None:
+        identity["extensions_error"] = extensions_error
+    return identity
 
 
-def _subject_alternative_names(certificate: x509.Certificate) -> list[str]:
+def _extensions(certificate: x509.Certificate) -> tuple[x509.Extensions | None, str | None]:
+    """The extensions, or why they could not be read.
+
+    cryptography decodes every extension on first access, so one it rejects —
+    an SCT list naming an unsupported signature algorithm, a malformed SCT
+    length — makes *all* of them unreadable. That is one certificate's problem,
+    not the collector's: the key, signature and validity come from the TBS
+    certificate, not from extensions, and are still findings. The reason goes
+    into the evidence rather than disappearing, so an empty SAN list is never
+    mistaken for a certificate that has none.
+    """
     try:
-        extension = certificate.extensions.get_extension_for_class(
-            x509.SubjectAlternativeName
-        )
+        return certificate.extensions, None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def _subject_alternative_names(extensions: x509.Extensions | None) -> list[str]:
+    if extensions is None:
+        return []
+    try:
+        extension = extensions.get_extension_for_class(x509.SubjectAlternativeName)
     except x509.ExtensionNotFound:
         return []
     names = list(extension.value.get_values_for_type(x509.DNSName))

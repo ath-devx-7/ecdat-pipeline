@@ -7,6 +7,9 @@ import tailwindcss from "@tailwindcss/vite";
 // does the same. Nothing in the bundle carries a backend hostname.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? ""),
+  },
   server: {
     port: 5173,
     proxy: {

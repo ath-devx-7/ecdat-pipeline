@@ -1,0 +1,438 @@
+/* Two columns at the mockup's proportions (541 : 617 at 1440px). Neither
+   column scrolls the page: the form scrolls inside its panel above a fixed
+   footer, and the recent-scans table scrolls inside its own. */
+.layout {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 541fr) minmax(0, 617fr);
+  gap: var(--sp-4);
+  min-height: 0;
+}
+
+/* ---- left: the form ---- */
+.form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.formScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4);
+}
+
+.fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.callout {
+  margin-bottom: var(--sp-4);
+}
+
+.bannerList {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--banner-error-fg);
+}
+
+.section + .section {
+  margin-top: var(--sp-5);
+}
+
+.sectionCaps {
+  display: block;
+  margin-bottom: var(--sp-3);
+}
+
+.field + .field,
+.row + .field,
+.field + .row {
+  margin-top: var(--sp-3);
+}
+
+.label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.labelHint {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.row {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.input {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 10px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 var(--fs-sm) / 1 var(--font-sans);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-faint);
+}
+
+.input:disabled,
+.textarea:disabled {
+  background: var(--surface-disabled);
+  color: var(--text-help);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.readonly {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 86px;
+  padding: 8px 10px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 var(--fs-xs) / 1.5 var(--font-mono);
+  resize: vertical;
+}
+
+.invalid {
+  border-color: var(--field-error-border);
+}
+
+.help {
+  margin: 6px 0 0;
+  color: var(--text-help);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.help code {
+  font-family: var(--font-mono);
+}
+
+.fieldError {
+  margin: 6px 0 0;
+  color: var(--field-error-fg);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+/* segmented source-type control */
+.segments {
+  display: flex;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.segment {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-left: var(--bw) solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font: 400 var(--fs-xs) / 1 var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.segment:first-child {
+  border-left: 0;
+}
+
+.segmentOn {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.segment:disabled {
+  cursor: not-allowed;
+}
+
+.segmentOn:disabled {
+  background: var(--accent-border-strong);
+}
+
+/* scan-mode radio cards */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  align-content: start;
+  padding: 12px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.cardOn {
+  border-color: var(--accent-border-strong);
+  background: var(--accent-option);
+}
+
+.card input {
+  grid-row: 1 / span 2;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.cardTitle {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.cardText {
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.hiddenInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* collectors: which ones this mode runs. Read-only — the mode decides, so the
+   box is drawn rather than being an input that cannot be unticked. */
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.collectors {
+  margin: 0;
+  padding: 0;
+  border-top: var(--bw) solid var(--divider);
+  list-style: none;
+}
+
+.collector {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 12px;
+  padding: 10px 0;
+  border-bottom: var(--bw) solid var(--divider);
+}
+
+.tick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: var(--bw) solid var(--text-faint);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: #fff;
+}
+
+.tickOn {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.collectorName {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.collectorOff .collectorName,
+.collectorOff .collectorText {
+  color: var(--text-help);
+}
+
+.collectorTools {
+  margin-left: 8px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.collectorText {
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* sticky footer */
+.footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-top: var(--bw) solid var(--border-subtle);
+}
+
+.footerText {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* ---- right column ---- */
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+}
+
+.recent {
+  flex: 1;
+  min-height: 0;
+}
+
+.recentBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.recentTable {
+  flex: 1;
+  min-height: 0;
+}
+
+.idLink {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-decoration: none;
+}
+
+.idLink:hover {
+  text-decoration: underline;
+}
+
+.cellMuted {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.recentEmpty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-8);
+  text-align: center;
+}
+
+.recentEmptyTitle {
+  margin: 0 0 var(--sp-3);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.recentEmptyText {
+  max-width: 380px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+/* offline-content key/value rows */
+.kv {
+  display: grid;
+  grid-template-columns: 136px minmax(0, 1fr) auto;
+  margin: 0;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-xs);
+}
+
+.kv > * {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin: 0;
+  border-bottom: var(--bw) solid var(--divider);
+}
+
+.kv > :nth-last-child(-n + 3) {
+  border-bottom: 0;
+}
+
+.kvLabel {
+  color: var(--text-2);
+}
+
+.kvValue {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kvNote {
+  justify-content: flex-end;
+  padding-left: var(--sp-4);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.kvStale {
+  color: var(--sev-high-fg);
+}

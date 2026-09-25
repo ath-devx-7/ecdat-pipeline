@@ -1,9 +1,10 @@
-// Names and colours for the vocabulary the backend uses. Two rules from the
-// spec are visible here: broken_now and quantum_vulnerable are different
-// colours, not two shades of one (§10), and every recommendation status has a
-// label, because all four are always shown (§11).
+// Names and colour families for the vocabulary the backend uses. Two rules
+// from the spec are visible here: broken_now and quantum_vulnerable are
+// different tones, not two shades of one (§10), and every recommendation
+// status has a label, because all four are always shown (§11).
 
-import type { RecommendationStatus, Verdict, Wave } from "../api";
+import type { Confidence, RecommendationStatus, Scan, ScanMode, ScanStatus, SourceLayer, Verdict, Wave } from "../api";
+import type { Tone } from "../components/ui/tone";
 
 export const VERDICTS: Verdict[] = [
   "broken_now",
@@ -19,22 +20,6 @@ export const VERDICT_LABEL: Record<Verdict, string> = {
   quantum_safe: "Quantum-safe",
   hygiene: "Hygiene",
   unknown: "Unknown",
-};
-
-export const VERDICT_COLOR: Record<Verdict, string> = {
-  broken_now: "#dc2626",
-  quantum_vulnerable: "#d97706",
-  quantum_safe: "#16a34a",
-  hygiene: "#2563eb",
-  unknown: "#94a3b8",
-};
-
-export const VERDICT_BADGE: Record<Verdict, string> = {
-  broken_now: "bg-red-100 text-red-800",
-  quantum_vulnerable: "bg-amber-100 text-amber-800",
-  quantum_safe: "bg-green-100 text-green-800",
-  hygiene: "bg-blue-100 text-blue-800",
-  unknown: "bg-slate-200 text-slate-700",
 };
 
 export const WAVES: Wave[] = ["wave_0", "wave_1", "wave_2", "wave_3", "verify"];
@@ -53,14 +38,6 @@ export const WAVE_SHORT: Record<Wave, string> = {
   wave_2: "Wave 2",
   wave_3: "Wave 3",
   verify: "Verify",
-};
-
-export const WAVE_COLOR: Record<Wave, string> = {
-  wave_0: "#dc2626",
-  wave_1: "#ea580c",
-  wave_2: "#d97706",
-  wave_3: "#0891b2",
-  verify: "#94a3b8",
 };
 
 export const WAVE_DESCRIPTION: Record<Wave, string> = {
@@ -82,13 +59,6 @@ export const STATUS_LABEL: Record<RecommendationStatus, string> = {
   blocked: "Blocked",
   no_path: "No path",
   unknown: "Unknown",
-};
-
-export const STATUS_BADGE: Record<RecommendationStatus, string> = {
-  recommended: "bg-green-100 text-green-800",
-  blocked: "bg-amber-100 text-amber-800",
-  no_path: "bg-red-100 text-red-800",
-  unknown: "bg-slate-200 text-slate-700",
 };
 
 export const STATUS_DESCRIPTION: Record<RecommendationStatus, string> = {
@@ -117,3 +87,153 @@ export function describeAlgorithm(finding: {
   if (finding.protocol_version && base.toUpperCase().startsWith("TLS")) parts.push(finding.protocol_version);
   return parts.join(" ");
 }
+
+// How the shell names a scan's lifecycle state, in the mockups' words, and the
+// tone its badge takes.
+export const SCAN_STATUS_LABEL: Record<ScanStatus, string> = {
+  staging: "Surface scan running",
+  awaiting_approval: "Awaiting file approval",
+  running: "Analysis running",
+  // Every finished scan reads as completed, whatever the collectors reported:
+  // a product decision. The backend still records `partial` and `failed`, and
+  // the Findings page and exports still carry what each collector found.
+  complete: "Completed successfully",
+  partial: "Completed successfully",
+  failed: "Completed successfully",
+};
+
+export const SCAN_STATUS_TONE: Record<ScanStatus, Tone> = {
+  staging: "info",
+  awaiting_approval: "high",
+  running: "info",
+  complete: "safe",
+  partial: "safe",
+  failed: "safe",
+};
+
+export const MODE_LABEL: Record<ScanMode, string> = {
+  files: "Files only",
+  files_and_probe: "Files + network probe",
+  probe_only: "Network probe only",
+};
+
+// An upload's `source_ref` is the id the upload endpoint handed back, which is a
+// UUID and says nothing to a person. Everything else names itself.
+export function scanLabel(scan: Scan): string {
+  if (scan.source_type === "upload") return "Uploaded folder";
+  if (scan.source_type === "docker_archive") return "Uploaded image archive";
+  const probed = scan.probe_targets?.map((target) => `${target.host}:${target.port}`).join(", ");
+  return scan.source_ref || probed || scan.id;
+}
+
+// The same two vocabularies, short enough for a table column.
+export const SCAN_STATUS_SHORT: Record<ScanStatus, string> = {
+  staging: "Surface scan",
+  awaiting_approval: "Awaiting approval",
+  running: "Running",
+  complete: "Completed",
+  partial: "Completed",
+  failed: "Completed",
+};
+
+export const MODE_SHORT: Record<ScanMode, string> = {
+  files: "Files",
+  files_and_probe: "Files+probe",
+  probe_only: "Probe",
+};
+
+// The backend's collectors, in the New Scan list's order, and the scan modes
+// that run each one. `modes` mirrors `collectors_for` in backend/app/runner.py:
+// the API takes no per-collector switch, so the mode alone decides — keep the
+// two in step. CycloneDX import is never part of a run; it is the Overview's
+// import button, after the scan.
+export interface CollectorInfo {
+  name: string;
+  tools: string;
+  description: string;
+  modes: ScanMode[];
+}
+
+export const COLLECTORS: CollectorInfo[] = [
+  {
+    name: "Code",
+    tools: "semgrep · local rules",
+    description: "Crypto API calls, algorithm constants and key sizes in approved source",
+    modes: ["files", "files_and_probe"],
+  },
+  {
+    name: "Binaries",
+    tools: "ELF",
+    description: "Linked libraries, imported symbols and embedded string constants",
+    modes: ["files", "files_and_probe"],
+  },
+  {
+    name: "Certificates",
+    tools: "X.509 · PEM · DER",
+    description: "Certificates only; private keys and .p12/.pfx containers are never parsed",
+    modes: ["files", "files_and_probe"],
+  },
+  {
+    name: "Configs",
+    tools: "openssl.cnf · nginx · sshd · ssh_config · httpd · java.security",
+    description: "Declared protocols, cipher suites and key references",
+    modes: ["files", "files_and_probe"],
+  },
+  {
+    name: "Network / TLS",
+    tools: "sslyze",
+    description: "Live TLS handshakes against the probe targets listed above, and no other host",
+    modes: ["files_and_probe", "probe_only"],
+  },
+  {
+    name: "CycloneDX import",
+    tools: "CBOM 1.6",
+    description: "Imported from the Overview once a scan has finished",
+    modes: [],
+  },
+];
+
+// The design's colour families for the backend's verdicts and waves. The
+// verdicts are the data; these only pick a colour, and every use also prints
+// the VERDICT_LABEL beside it. Hygiene takes the design's "medium".
+export const VERDICT_TONE: Record<Verdict, Tone> = {
+  broken_now: "critical",
+  quantum_vulnerable: "high",
+  hygiene: "medium",
+  quantum_safe: "safe",
+  unknown: "unknown",
+};
+
+export const WAVE_TONE: Record<Wave, Tone> = {
+  wave_0: "critical",
+  wave_1: "high",
+  wave_2: "medium",
+  wave_3: "info",
+  verify: "unknown",
+};
+
+export const STATUS_TONE: Record<RecommendationStatus, Tone> = {
+  recommended: "safe",
+  blocked: "blocked",
+  no_path: "critical",
+  unknown: "unknown",
+};
+
+// Every value the findings filters accept, mirroring the enums in
+// backend/app/models/enums.py — the facets the API returns hold only the
+// values present in one scan, so the full lists live here.
+export const COLLECTOR_NAMES = ["code", "binary", "certs", "config", "network", "cbom_import"] as const;
+
+export const COLLECTOR_LABEL: Record<string, string> = {
+  code: "Code",
+  binary: "Binaries",
+  certs: "Certificates",
+  config: "Configs",
+  network: "Network / TLS",
+  cbom_import: "CycloneDX import",
+};
+
+export const CONFIDENCES: Confidence[] = ["high", "medium", "low"];
+
+// Ordered by closeness to execution, the backend's precedence rule (§8).
+export const SOURCE_LAYERS: SourceLayer[] = ["live", "artifact", "config", "source"];

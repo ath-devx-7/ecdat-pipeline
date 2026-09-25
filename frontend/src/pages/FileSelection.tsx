@@ -1,11 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type ApproveResponse, type DirectoryNode, type FileTree, type TreeNode } from "../api";
-import { countSelected, filePaths, formatBytes, selectAll, selectionState, toggleNode } from "../lib/tree";
+import { api, type DirectoryNode, type FileNode, type FileTree, type TreeNode } from "../api";
+import { PageBody, PageHeader } from "../components/ui/AppShell";
+import { DataTable, type Column } from "../components/ui/DataTable";
+import { FilterSelect } from "../components/ui/FilterBar";
+import { Icon } from "../components/ui/Icon";
+import { Button, buttonClass, Panel } from "../components/ui/primitives";
+import { StatePanel } from "../components/ui/StatePanel";
+import { cx } from "../components/ui/tone";
+import { VENDORED_DIRS } from "../lib/exclusions";
+import { SCAN_STATUS_LABEL } from "../lib/labels";
+import { formatBytes } from "../lib/tree";
+import { useElapsed } from "../lib/useElapsed";
+import s from "./FileSelection.module.css";
 
 // §13 screen 2 — the permission gate. Nothing has been read yet; the tree is
 // path and size only, and the paths ticked here are exactly the list the
 // collectors are allowed to open. The screen blocks until submitted.
+//
+// The target is shown as it is laid out on disk: every folder and subfolder,
+// each with a checkbox that selects or clears everything beneath it. While a
+// filter is set, a folder's checkbox and "Select all" act on the files the
+// filter shows, never on hidden ones.
 //
 // It is also where X is answered (§12). The data lifetime is the one Mosca
 // input nobody can measure from a file, and this is the only screen where the
@@ -22,6 +38,8 @@ import { countSelected, filePaths, formatBytes, selectAll, selectionState, toggl
 //: The scan-wide X the screen opens with. A working default, not a measurement.
 const DEFAULT_X = 20;
 
+const n = (value: number) => value.toLocaleString("en-US");
+
 //: Years, bounded to what the API accepts. A blank or unparseable box keeps the
 //: previous value rather than silently becoming zero — "0 years" is a real
 //: answer about data and must be typed deliberately.
@@ -31,22 +49,100 @@ function clampYears(entered: string, previous: number): number {
   return Math.min(100, Math.max(0, Math.trunc(value)));
 }
 
-//: Every file path under a node — a folder edit applies to exactly these.
-function descendantPaths(node: TreeNode): string[] {
-  if (node.type === "file") return [node.path];
-  return node.children.flatMap(descendantPaths);
+//: ".py", or "(none)" for a name with no extension. Dotfiles have none.
+function extensionOf(path: string): string {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot).toLowerCase() : "(none)";
 }
 
-//: What one row is scored at: its own value if it has one, else the global.
-function effectiveYears(path: string, perFile: Map<string, number>, global: number): number {
-  const own = perFile.get(path);
-  return own === undefined ? global : own;
+//: The path box takes a substring or a `*` glob, case-insensitive.
+function pathMatcher(query: string): (path: string) => boolean {
+  const trimmed = query.trim();
+  if (!trimmed) return () => true;
+  const pattern = trimmed.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  const re = new RegExp(pattern, "i");
+  return (path) => re.test(path);
 }
 
-//: A folder reads as changed when anything under it differs from the global,
-//: which is what makes an exception visible without expanding the tree.
-function differsFromGlobal(node: TreeNode, perFile: Map<string, number>, global: number): boolean {
-  return descendantPaths(node).some((path) => effectiveYears(path, perFile, global) !== global);
+interface TreeIndex {
+  files: FileNode[];
+  // every file path at or below each folder, keyed by the folder's path
+  under: Map<string, string[]>;
+  folders: string[];
+}
+
+// Walked once per tree, so a checkbox never re-walks the subtree under it.
+function indexTree(root: DirectoryNode): TreeIndex {
+  const files: FileNode[] = [];
+  const under = new Map<string, string[]>();
+  const folders: string[] = [];
+  const walk = (node: TreeNode): string[] => {
+    if (node.type === "file") {
+      files.push(node);
+      return [node.path];
+    }
+    folders.push(node.path);
+    const paths = node.children.flatMap(walk);
+    under.set(node.path, paths);
+    return paths;
+  };
+  walk(root);
+  return { files, under, folders };
+}
+
+type Tri = "none" | "some" | "all";
+
+function triState(paths: string[], selected: Set<string>): Tri {
+  if (paths.length === 0) return "none";
+  let chosen = 0;
+  for (const path of paths) if (selected.has(path)) chosen += 1;
+  return chosen === 0 ? "none" : chosen === paths.length ? "all" : "some";
+}
+
+interface Row {
+  node: TreeNode;
+  depth: number;
+}
+
+// The visible rows, in tree order. While a filter is set every folder holding
+// a match is open, so a match is never hidden behind a collapsed parent.
+function flatten(root: DirectoryNode, expanded: Set<string>, visible: Set<string> | null, index: TreeIndex): Row[] {
+  const rows: Row[] = [];
+  const walk = (node: TreeNode, depth: number) => {
+    if (node.type === "file") {
+      if (!visible || visible.has(node.path)) rows.push({ node, depth });
+      return;
+    }
+    if (visible && !(index.under.get(node.path) ?? []).some((path) => visible.has(path))) return;
+    rows.push({ node, depth });
+    if (visible || expanded.has(node.path)) node.children.forEach((child) => walk(child, depth + 1));
+  };
+  root.children.forEach((child) => walk(child, 0));
+  return rows;
+}
+
+function TriCheckbox({ state, onChange, label, disabled }: {
+  state: Tri;
+  onChange: () => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === "some";
+  }, [state]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className={s.check}
+      checked={state === "all"}
+      onChange={onChange}
+      aria-label={label}
+      disabled={disabled}
+    />
+  );
 }
 
 export default function FileSelection() {
@@ -57,11 +153,14 @@ export default function FileSelection() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set([""]));
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<ApproveResponse | null>(null);
   const [years, setYears] = useState(DEFAULT_X);
   //: Only the files that differ. An absent path means "whatever the scan says",
   //: which is a different claim from "the same number, written down twice".
   const [perFile, setPerFile] = useState<Map<string, number>>(new Map());
+  const [query, setQuery] = useState("");
+  const [extension, setExtension] = useState("");
+  const [unselectedOnly, setUnselectedOnly] = useState(false);
+  const elapsed = useElapsed(running);
 
   useEffect(() => {
     api
@@ -83,7 +182,94 @@ export default function FileSelection() {
       .catch((err) => setError(err.message));
   }, [scanId]);
 
-  const total = useMemo(() => (tree ? filePaths(tree.root).length : 0), [tree]);
+  const index = useMemo(() => (tree ? indexTree(tree.root) : null), [tree]);
+  const files = useMemo(() => index?.files ?? [], [index]);
+  const total = files.length;
+  const totalBytes = useMemo(() => files.reduce((sum, file) => sum + (file.size_bytes ?? 0), 0), [files]);
+  const selectedBytes = useMemo(
+    () => files.reduce((sum, file) => sum + (selected.has(file.path) ? (file.size_bytes ?? 0) : 0), 0),
+    [files, selected],
+  );
+
+  const extensions = useMemo(() => {
+    const counts = new Map<string, { total: number; selected: number }>();
+    for (const file of files) {
+      const ext = extensionOf(file.path);
+      const entry = counts.get(ext) ?? { total: 0, selected: 0 };
+      entry.total += 1;
+      if (selected.has(file.path)) entry.selected += 1;
+      counts.set(ext, entry);
+    }
+    return [...counts.entries()].sort((a, b) => b[1].total - a[1].total || a[0].localeCompare(b[0]));
+  }, [files, selected]);
+
+  const filtering = query.trim() !== "" || extension !== "" || unselectedOnly;
+  const visible = useMemo(() => {
+    if (!filtering) return null;
+    const matches = pathMatcher(query);
+    return new Set(
+      files
+        .filter((file) => matches(file.path))
+        .filter((file) => !extension || extensionOf(file.path) === extension)
+        .filter((file) => !unselectedOnly || !selected.has(file.path))
+        .map((file) => file.path),
+    );
+  }, [filtering, files, query, extension, unselectedOnly, selected]);
+  const shownPaths = useMemo(() => (visible ? [...visible] : files.map((file) => file.path)), [visible, files]);
+
+  const rows = useMemo(
+    () => (tree && index ? flatten(tree.root, expanded, visible, index) : []),
+    [tree, index, expanded, visible],
+  );
+
+  const overridden = [...perFile.entries()].filter(([, value]) => value !== years).length;
+
+  // Every file a row stands for: the file itself, or all files under a folder
+  // — narrowed to what the filter shows, so a click never touches hidden files.
+  function pathsOf(node: TreeNode): string[] {
+    const all = node.type === "file" ? [node.path] : (index?.under.get(node.path) ?? []);
+    return visible ? all.filter((path) => visible.has(path)) : all;
+  }
+
+  function setMany(paths: string[], on: boolean) {
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const path of paths) {
+        if (on) next.add(path);
+        else next.delete(path);
+      }
+      return next;
+    });
+  }
+
+  // A fully-ticked box clears; anything else (empty or partly ticked)
+  // completes — what an indeterminate checkbox is expected to do.
+  function toggleMany(paths: string[]) {
+    setMany(paths, triState(paths, selected) !== "all");
+  }
+
+  function setYearsFor(paths: string[], value: number) {
+    setPerFile((current) => {
+      const next = new Map(current);
+      for (const path of paths) next.set(path, value);
+      return next;
+    });
+  }
+
+  function toggleExpanded(path: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  function clearFilters() {
+    setQuery("");
+    setExtension("");
+    setUnselectedOnly(false);
+  }
 
   async function approve() {
     setRunning(true);
@@ -96,8 +282,7 @@ export default function FileSelection() {
       for (const [path, value] of perFile) {
         if (value !== years) overrides[path] = value;
       }
-      const outcome = await api.approve(scanId, [...selected], { years, perFile: overrides });
-      setResult(outcome);
+      await api.approve(scanId, [...selected], { years, perFile: overrides });
       navigate(`/scans/${scanId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -106,233 +291,397 @@ export default function FileSelection() {
     }
   }
 
+  const back = (
+    <Link to="/" className={buttonClass("secondary")}>
+      Back to configuration
+    </Link>
+  );
+
+  // ---- error: the tree could not be read at all ----
   if (error && !tree) {
     return (
-      <div className="card text-sm text-red-800">
-        {error} — <Link to="/" className="underline">start a new scan</Link>
-      </div>
+      <>
+        <PageHeader title="File Selection" subtitle="The file list could not be loaded." />
+        <PageBody>
+          <StatePanel
+            variant="error"
+            tag="File list unavailable"
+            meta={scanId.slice(0, 8)}
+            title="The discovered files could not be loaded"
+            log={[error]}
+            nextSteps={["Start the scan again from the configuration screen."]}
+            actions={back}
+          />
+        </PageBody>
+      </>
     );
   }
-  if (!tree) return <div className="text-sm text-slate-500">Loading the file tree…</div>;
 
-  if (tree.status !== "awaiting_approval") {
+  // ---- error: staging failed ----
+  if (tree?.status === "failed") {
     return (
-      <div className="card text-sm">
-        This scan is <strong>{tree.status}</strong>; its file selection has already been submitted.{" "}
-        <Link to={`/scans/${scanId}`} className="underline">Open the overview.</Link>
-      </div>
+      <>
+        <PageHeader title="File Selection" subtitle="Surface scan did not complete." />
+        <PageBody>
+          <StatePanel
+            variant="error"
+            tag="Surface scan failed"
+            meta={scanId.slice(0, 8)}
+            title="The target could not be listed"
+            nextSteps={["Check that the folder, archive or repository was readable, then start the scan again."]}
+            actions={back}
+          >
+            No files were enumerated, so there is nothing to approve.
+          </StatePanel>
+        </PageBody>
+      </>
     );
   }
 
-  return (
-    <div className="space-y-4">
-      <div className="card flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">Choose what may be read</h1>
-        <span className="text-sm text-slate-600">
-          <strong>{selected.size}</strong> of {total} files selected
-        </span>
-        <div className="ml-auto flex items-center gap-2">
-          <label className="flex items-center gap-2 text-sm" htmlFor="years">
-            <span className="text-slate-600">Data lifetime (X)</span>
-            <input
-              id="years"
-              type="number"
-              className="w-20 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm focus:border-slate-500 focus:outline-none"
-              min={0}
-              max={100}
-              value={years}
-              disabled={running}
-              onChange={(e) => setYears(clampYears(e.target.value, years))}
-            />
-            <span className="text-slate-600">years</span>
-          </label>
-          <button className="btn-secondary" onClick={() => setSelected(selectAll(tree.root))} disabled={running}>
-            Select all
-          </button>
-          <button className="btn-secondary" onClick={() => setSelected(new Set())} disabled={running}>
-            Clear
-          </button>
-          <button className="btn-secondary" onClick={() => setExpanded(allDirectories(tree.root))} disabled={running}>
-            Expand all
-          </button>
-          <button className="btn-secondary" onClick={() => setExpanded(new Set([""]))} disabled={running}>
-            Collapse all
-          </button>
-          <button className="btn" onClick={approve} disabled={running || selected.size === 0}>
-            {running ? "Running collectors…" : `Approve ${selected.size} and scan`}
-          </button>
-        </div>
-      </div>
-
-      <p className="px-1 text-xs text-slate-500">
-        How long this data must stay confidential — X in Mosca's inequality. Every file uses the
-        number above unless you give it its own; setting a folder sets everything inside it.
-        Changed rows are shaded.
-      </p>
-
-      {running && (
-        <div className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-700">
-          Collectors are running over the approved paths only. This request blocks until every
-          collector has finished or hit its budget.
-        </div>
-      )}
-      {error && <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-      {result && <div className="text-sm text-slate-600">Scan {result.status}: {result.finding_count} findings.</div>}
-
-      <div className="card overflow-x-auto">
-        <ul className="text-sm">
-          {tree.root.children.map((child) => (
-            <TreeRow
-              key={child.path}
-              node={child}
-              depth={0}
-              selected={selected}
-              expanded={expanded}
-              years={years}
-              perFile={perFile}
-              onYears={(node, value) =>
-                setPerFile((current) => {
-                  const next = new Map(current);
-                  // A folder assigns to every file under it, so the value the
-                  // user typed on the folder is the value each file now has.
-                  for (const path of descendantPaths(node)) next.set(path, value);
-                  return next;
-                })
-              }
-              onToggle={(node) => setSelected(toggleNode(selected, node))}
-              onExpand={(path) =>
-                setExpanded((current) => {
-                  const next = new Set(current);
-                  if (next.has(path)) next.delete(path);
-                  else next.add(path);
-                  return next;
-                })
-              }
-            />
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-function allDirectories(root: DirectoryNode): Set<string> {
-  const paths = new Set<string>([""]);
-  const walk = (node: TreeNode) => {
-    if (node.type === "directory") {
-      paths.add(node.path);
-      node.children.forEach(walk);
-    }
-  };
-  walk(root);
-  return paths;
-}
-
-function TreeRow({
-  node,
-  depth,
-  selected,
-  expanded,
-  years,
-  perFile,
-  onYears,
-  onToggle,
-  onExpand,
-}: {
-  node: TreeNode;
-  depth: number;
-  selected: Set<string>;
-  expanded: Set<string>;
-  years: number;
-  perFile: Map<string, number>;
-  onYears: (node: TreeNode, value: number) => void;
-  onToggle: (node: TreeNode) => void;
-  onExpand: (path: string) => void;
-}) {
-  const state = selectionState(selected, node);
-  const checkbox = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (checkbox.current) checkbox.current.indeterminate = state === "some";
-  }, [state]);
-
-  const isDirectory = node.type === "directory";
-  const open = isDirectory && expanded.has(node.path);
-
-  // A folder's box shows one number only when everything under it agrees;
-  // a mixed folder shows blank rather than picking one of its children's
-  // values and implying the others match it.
-  const descendants = descendantPaths(node);
-  const values = new Set(descendants.map((path) => effectiveYears(path, perFile, years)));
-  const shown = values.size === 1 ? [...values][0] : "";
-  const changed = differsFromGlobal(node, perFile, years);
-
-  return (
-    <li>
-      <div
-        className={`flex items-center gap-2 rounded px-1 py-0.5 hover:bg-slate-100 ${
-          changed ? "bg-slate-200/70" : ""
-        }`}
-        style={{ paddingLeft: `${depth * 1.25}rem` }}
-      >
-        {isDirectory ? (
-          <button
-            type="button"
-            className="w-4 text-slate-500"
-            onClick={() => onExpand(node.path)}
-            aria-label={open ? "Collapse" : "Expand"}
+  // ---- already submitted ----
+  if (tree && tree.status !== "awaiting_approval" && tree.status !== "staging") {
+    return (
+      <>
+        <PageHeader title="File Selection" subtitle="This selection has already been approved." />
+        <PageBody>
+          <StatePanel
+            variant="empty"
+            tag={SCAN_STATUS_LABEL[tree.status]}
+            tagTone="safe"
+            meta={`${scanId.slice(0, 8)} · ${n(tree.approved_count)} of ${n(tree.file_count)} files approved`}
+            title="File selection already submitted"
+            actions={
+              <Link to={`/scans/${scanId}`} className={buttonClass("primary")}>
+                Open overview
+              </Link>
+            }
           >
-            {open ? "▾" : "▸"}
-          </button>
-        ) : (
-          <span className="w-4" />
-        )}
-        <input
-          ref={checkbox}
-          type="checkbox"
-          checked={state === "all"}
-          onChange={() => onToggle(node)}
-          aria-label={node.path}
+            The approved paths are fixed once analysis starts; the findings were read from exactly those files.
+          </StatePanel>
+        </PageBody>
+      </>
+    );
+  }
+
+  // ---- empty: nothing any collector can analyse ----
+  if (tree && tree.status === "awaiting_approval" && total === 0) {
+    return (
+      <>
+        <PageHeader title="File Selection" subtitle="Nothing to approve for this target." />
+        <PageBody>
+          <StatePanel
+            variant="empty"
+            tag="No eligible files"
+            meta={scanId.slice(0, 8)}
+            title="The surface scan found nothing any enabled collector can analyse"
+            nextSteps={[
+              "If this target should contain source, check that it is the build tree and not a documentation export.",
+              `Vendored trees and caches (${VENDORED_DIRS.join(", ")}) are left behind by design.`,
+            ]}
+            actions={back}
+          >
+            Every entry was either excluded by a default rule or was not a file any collector reads, so there is nothing
+            to approve.
+          </StatePanel>
+        </PageBody>
+      </>
+    );
+  }
+
+  // ---- populated, or enumerating (tree not yet in hand / still staging) ----
+  const enumerating = !tree || tree.status === "staging";
+  const busy = enumerating || running;
+
+  const columns: Column<Row>[] = [
+    {
+      key: "check",
+      header: (
+        <TriCheckbox
+          state={triState(shownPaths, selected)}
+          onChange={() => toggleMany(shownPaths)}
+          label={filtering ? "Select every file shown" : "Select every file"}
+          disabled={busy || shownPaths.length === 0}
         />
-        <span className={isDirectory ? "font-medium" : ""}>{node.name}</span>
-        {isDirectory ? (
-          <span className="text-xs text-slate-500">
-            {countSelected(selected, node)}/{node.file_count} · {formatBytes(node.size_bytes)}
+      ),
+      width: 40,
+      skeletonWidth: 14,
+      render: ({ node }) => (
+        <TriCheckbox
+          state={triState(pathsOf(node), selected)}
+          onChange={() => toggleMany(pathsOf(node))}
+          label={node.type === "directory" ? `Select everything in ${node.path}` : node.path}
+          disabled={running}
+        />
+      ),
+    },
+    {
+      key: "path",
+      header: "Path",
+      skeletonWidth: 260,
+      render: ({ node, depth }) => {
+        const indent = { paddingLeft: depth * 18 };
+        if (node.type === "directory") {
+          const open = visible !== null || expanded.has(node.path);
+          const under = index?.under.get(node.path) ?? [];
+          const chosen = under.filter((path) => selected.has(path)).length;
+          return (
+            <span className={s.pathCell} style={indent}>
+              <button
+                type="button"
+                className={s.twisty}
+                onClick={() => toggleExpanded(node.path)}
+                aria-label={open ? `Collapse ${node.path}` : `Expand ${node.path}`}
+                aria-expanded={open}
+                disabled={visible !== null}
+              >
+                <Icon name={open ? "chevronDown" : "chevronRight"} size={14} />
+              </button>
+              <span className={s.dirName}>{node.name}</span>
+              <span className={s.dirMeta}>
+                {n(node.file_count)} files · {n(chosen)} selected · {formatBytes(node.size_bytes) || "0 B"}
+              </span>
+            </span>
+          );
+        }
+        return (
+          <span className={s.pathCell} style={indent}>
+            <span className={s.twistySpacer} />
+            <span className={s.fileName} title={node.path}>
+              {node.name}
+            </span>
           </span>
-        ) : (
-          <span className="text-xs text-slate-400">{formatBytes(node.size_bytes)}</span>
-        )}
-        <label className="ml-auto flex items-center gap-1 text-xs text-slate-500">
+        );
+      },
+    },
+    {
+      key: "size",
+      header: "Size",
+      width: 100,
+      align: "right",
+      skeletonWidth: 60,
+      render: ({ node }) => <span className={s.size}>{formatBytes(node.size_bytes) || "0 B"}</span>,
+    },
+    {
+      key: "x",
+      header: "X (years)",
+      width: 100,
+      skeletonWidth: 60,
+      render: ({ node }) => {
+        // A folder's box shows one number only when everything under it
+        // agrees; a mixed folder shows blank rather than picking one of its
+        // children's values and implying the others match it.
+        const paths = node.type === "file" ? [node.path] : (index?.under.get(node.path) ?? []);
+        const values = new Set(paths.map((path) => perFile.get(path) ?? years));
+        const shown = values.size === 1 ? [...values][0] : "";
+        return (
           <input
             type="number"
-            className="w-16 rounded border border-slate-300 bg-white px-1 py-0.5 text-xs focus:border-slate-500 focus:outline-none"
+            className={s.years}
             min={0}
             max={100}
             value={shown}
             placeholder="mixed"
+            disabled={running}
             aria-label={`Data lifetime for ${node.path}`}
-            onChange={(e) => onYears(node, clampYears(e.target.value, years))}
+            onChange={(e) => setYearsFor(paths, clampYears(e.target.value, years))}
           />
-          y
-        </label>
-      </div>
-      {open && (
-        <ul>
-          {(node as DirectoryNode).children.map((child) => (
-            <TreeRow
-              key={child.path}
-              years={years}
-              perFile={perFile}
-              onYears={onYears}
-              node={child}
-              depth={depth + 1}
-              selected={selected}
-              expanded={expanded}
-              onToggle={onToggle}
-              onExpand={onExpand}
+        );
+      },
+    },
+  ];
+
+  const differs = (node: TreeNode) => {
+    const paths = node.type === "file" ? [node.path] : (index?.under.get(node.path) ?? []);
+    return paths.some((path) => (perFile.get(path) ?? years) !== years);
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="File Selection"
+        subtitle={
+          enumerating
+            ? "Loading the discovered files."
+            : "Approval gate — nothing is analysed until you approve this selection. Uncheck anything out of scope."
+        }
+      />
+      <PageBody>
+        <div className={s.layout}>
+          <section className={s.main}>
+            <div className={s.toolbar}>
+              <Button small onClick={() => setMany(shownPaths, true)} disabled={busy || shownPaths.length === 0}>
+                {filtering ? `Select ${n(shownPaths.length)} shown` : "Select all"}
+              </Button>
+              <Button small onClick={() => setSelected(new Set())} disabled={busy || selected.size === 0}>
+                Clear
+              </Button>
+              <span className={s.divider} aria-hidden="true" />
+              <Button
+                small
+                onClick={() => index && setExpanded(new Set(index.folders))}
+                disabled={busy || filtering}
+                title={filtering ? "Every folder holding a match is already open" : undefined}
+              >
+                Expand all
+              </Button>
+              <Button small onClick={() => setExpanded(new Set([""]))} disabled={busy || filtering}>
+                Collapse all
+              </Button>
+              <span className={s.divider} aria-hidden="true" />
+              <input
+                type="search"
+                className={s.pathFilter}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Filter path, e.g. kex_*"
+                aria-label="Filter path"
+                disabled={enumerating}
+              />
+              <FilterSelect
+                label="Extension"
+                value={extension}
+                onChange={setExtension}
+                allLabel="all"
+                options={extensions.map(([ext, count]) => ({ value: ext, label: `${ext} (${count.total})` }))}
+              />
+              <label className={s.unselected}>
+                <input
+                  type="checkbox"
+                  checked={unselectedOnly}
+                  onChange={(e) => setUnselectedOnly(e.target.checked)}
+                  disabled={enumerating}
+                />
+                Unselected only
+              </label>
+              {filtering && (
+                <Button variant="link" onClick={clearFilters} style={{ fontSize: "var(--fs-xs)" }}>
+                  Clear filters
+                </Button>
+              )}
+              <span className={s.count}>
+                {enumerating ? "" : filtering ? `${n(shownPaths.length)} of ${n(total)} files shown` : `${n(total)} files`}
+              </span>
+            </div>
+
+            {running && (
+              <StatePanel
+                variant="loading"
+                appearance="callout"
+                className={s.callout}
+                title="Running collectors"
+                meta={`${n(selected.size)} approved files`}
+                elapsed={elapsed}
+              >
+                Collectors are running over the approved paths only. This request blocks until every collector has
+                finished or hit its budget.
+              </StatePanel>
+            )}
+
+            <DataTable
+              className={s.table}
+              columns={columns}
+              rows={rows}
+              rowKey={({ node }) => `${node.type}:${node.path}`}
+              rowClassName={({ node }) =>
+                cx(
+                  node.type === "directory" && s.dir,
+                  differs(node) && s.changed,
+                  node.type === "file" && !selected.has(node.path) && s.unchecked,
+                ) || undefined
+              }
+              loadingRows={enumerating ? 18 : 0}
+              empty={
+                <StatePanel variant="empty" framed={false} title="No files match these filters">
+                  <Button onClick={clearFilters}>Clear filters</Button>
+                </StatePanel>
+              }
             />
-          ))}
-        </ul>
-      )}
-    </li>
+
+            <div className={s.footer}>
+              <div className={s.footerText}>
+                <div className={s.footerTitle}>
+                  {enumerating
+                    ? "– of – files selected · –"
+                    : `${n(selected.size)} of ${n(total)} files selected · ${formatBytes(selectedBytes) || "0 B"}`}
+                </div>
+                <div className={s.footerSub}>
+                  {enumerating
+                    ? "Enumeration in progress · selection opens when the file list has loaded"
+                    : `X = ${years} years for every file` +
+                      (overridden ? ` except ${n(overridden)} with their own value` : "") +
+                      " · collectors open approved paths only"}
+                </div>
+              </div>
+              {error && tree && <span className={cx(s.footerChip, s.footerError)}>{error}</span>}
+              {!enumerating && !error && selected.size === 0 && (
+                <span className={s.footerChip}>Select at least one file to approve</span>
+              )}
+              {back}
+              <Button variant="primary" onClick={approve} disabled={busy || selected.size === 0}>
+                {running ? "Running collectors…" : `Approve ${n(selected.size)} and run analysis`}
+              </Button>
+            </div>
+          </section>
+
+          <aside className={s.side}>
+            <Panel title="Data lifetime (X)" meta="Mosca's inequality">
+              <label className={s.xRow} htmlFor="years">
+                <input
+                  id="years"
+                  type="number"
+                  className={s.xInput}
+                  min={0}
+                  max={100}
+                  value={years}
+                  disabled={busy}
+                  onChange={(e) => setYears(clampYears(e.target.value, years))}
+                />
+                years, for every file
+              </label>
+              <p className={s.sideText}>
+                How long this data must stay confidential. Every file uses this number unless you give it its own in the
+                X column; setting a folder sets everything inside it. Changed rows are shaded.
+              </p>
+            </Panel>
+
+            <Panel title="Selected by extension" flush>
+              {!enumerating && (
+                <dl className={s.kv}>
+                  {extensions.slice(0, 12).map(([ext, count]) => (
+                    <KvRow key={ext} label={ext} value={`${n(count.selected)} / ${n(count.total)}`} />
+                  ))}
+                  <KvRow
+                    label="Scan total"
+                    sans
+                    value={`${formatBytes(selectedBytes) || "0 B"} / ${formatBytes(totalBytes) || "0 B"}`}
+                  />
+                </dl>
+              )}
+            </Panel>
+
+            <Panel title="Excluded by default rules" flush>
+              <dl className={s.kv}>
+                {VENDORED_DIRS.map((dir) => (
+                  <KvRow key={dir} label={`**/${dir}/**`} value="pruned" />
+                ))}
+              </dl>
+              <p className={s.sideNote}>
+                Pruned at any depth before the tree was built, so they are not counted here. Set on the host with{" "}
+                <code>ECDAT_SURFACE_EXCLUDE_DIRS</code>.
+              </p>
+            </Panel>
+          </aside>
+        </div>
+      </PageBody>
+    </>
+  );
+}
+
+function KvRow({ label, value, sans }: { label: string; value: string; sans?: boolean }) {
+  return (
+    <>
+      <dt className={sans ? s.kvLabelSans : s.kvLabel}>{label}</dt>
+      <dd className={s.kvValue}>{value}</dd>
+    </>
   );
 }

@@ -1,0 +1,312 @@
+/* Main tree panel + a 299px side column. */
+.layout {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) 299px;
+  gap: var(--sp-4);
+  min-height: 0;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* ---- toolbar: selection and tree controls, then filters ---- */
+.toolbar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: var(--bw) solid var(--divider);
+}
+
+.divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 2px;
+  background: var(--border);
+}
+
+.unselected {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.unselected input,
+.check {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.pathFilter {
+  width: 200px;
+  height: 30px;
+  padding: 0 10px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 var(--fs-xs) / 1 var(--font-mono);
+}
+
+.pathFilter::placeholder {
+  color: var(--text-faint);
+}
+
+.count {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.table {
+  flex: 1;
+  min-height: 0;
+}
+
+.callout {
+  margin: var(--sp-3) var(--sp-3) 0;
+}
+
+/* ---- tree rows ---- */
+.pathCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.twisty {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.twisty:hover:not(:disabled) {
+  background: var(--skeleton);
+}
+
+.twisty:disabled {
+  cursor: default;
+}
+
+.twistySpacer {
+  flex: none;
+  width: 18px;
+}
+
+.dirName {
+  flex: none;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dirMeta {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileName {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unchecked .fileName {
+  color: var(--text-help);
+}
+
+tr.dir {
+  background: var(--canvas);
+}
+
+/* a row whose X differs from the scan-wide value */
+tr.changed {
+  background: var(--sev-high-bg);
+}
+
+tr.dir.changed {
+  background: var(--code-highlight);
+}
+
+.size {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.years {
+  width: 60px;
+  height: 24px;
+  padding: 0 6px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 var(--fs-xs) / 1 var(--font-mono);
+}
+
+.years::placeholder {
+  color: var(--text-faint);
+}
+
+/* ---- footer approval bar ---- */
+.footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: var(--bw) solid var(--border-subtle);
+}
+
+.footerText {
+  flex: 1;
+  min-width: 0;
+}
+
+.footerTitle {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.footerSub {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.footerChip {
+  max-width: 220px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--sev-high-bg);
+  color: var(--sev-high-fg);
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+}
+
+.footerError {
+  background: var(--banner-error-bg);
+  color: var(--banner-error-fg);
+}
+
+/* ---- side column ---- */
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin: 0;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-xs);
+}
+
+.kv > * {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin: 0;
+  border-bottom: var(--bw) solid var(--divider);
+}
+
+.kv > :nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.kvLabel {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kvLabelSans {
+  color: var(--text);
+}
+
+.kvValue {
+  justify-content: flex-end;
+  padding-left: var(--sp-3);
+  color: var(--text);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.sideNote {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-top: var(--bw) solid var(--divider);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  line-height: 1.45;
+}
+
+.sideNote code {
+  font-family: var(--font-mono);
+}
+
+.xRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.xInput {
+  width: 80px;
+  height: var(--control-h);
+  padding: 0 8px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 var(--fs-sm) / 1 var(--font-mono);
+}
+
+.sideText {
+  margin: var(--sp-2) 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}

@@ -1,24 +1,24 @@
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { api, type Roadmap as RoadmapData, type RoadmapItem, type Wave } from "../api";
+import { PageBody, PageHeader, shortId } from "../components/ui/AppShell";
+import { DataTable, type Column, type TableSection } from "../components/ui/DataTable";
+import { Icon } from "../components/ui/Icon";
+import { Banner, buttonClass, Caps, Panel, SeverityBadge } from "../components/ui/primitives";
+import { StatePanel } from "../components/ui/StatePanel";
+import { toneVars } from "../components/ui/tone";
 import {
-  api,
-  type BlockedChain,
-  type RecommendationStatus,
-  type Roadmap as RoadmapData,
-  type RoadmapItem,
-} from "../api";
-import {
-  STATUS_BADGE,
   STATUS_LABEL,
-  VERDICT_BADGE,
-  VERDICT_LABEL,
-  WAVE_COLOR,
+  STATUS_TONE,
   WAVE_DESCRIPTION,
   WAVE_LABEL,
+  WAVE_SHORT,
+  WAVE_TONE,
   WAVES,
   describeAlgorithm,
   titleCase,
 } from "../lib/labels";
+import s from "./Roadmap.module.css";
 
 // §13 screen 6. Waves, not a sorted list: each wave is a block of work that can
 // start together. Every item carries its target, its prerequisites in the
@@ -30,103 +30,12 @@ import {
 // config line, and that is the number someone planning the migration needs.
 // Beside the per-finding rows, never instead of them.
 
-export default function Roadmap() {
-  const { scanId = "" } = useParams();
-  const [data, setData] = useState<RoadmapData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.roadmap(scanId).then(setData).catch((err) => setError(err.message));
-  }, [scanId]);
-
-  if (error) return <div className="card text-sm text-red-800">{error}</div>;
-  if (!data) return <div className="text-sm text-slate-500">Loading…</div>;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-baseline gap-3">
-        <h1 className="text-xl font-semibold">Roadmap</h1>
-        <span className="text-sm text-slate-600">
-          scored at Z = {data.z_years_used ?? "—"} ·{" "}
-          <Link to={`/scans/${scanId}`} className="underline">
-            move the slider on the overview
-          </Link>{" "}
-          · {data.unscored} findings need no migration
-        </span>
-      </div>
-
-      <Blockers chains={data.blocked_chains} />
-
-      {WAVES.map((wave) => (
-        <section key={wave} className="card">
-          <div className="mb-1 flex items-baseline gap-3">
-            <span className="inline-block h-3 w-3 rounded-sm" style={{ background: WAVE_COLOR[wave] }} />
-            <h2 className="font-semibold">{WAVE_LABEL[wave]}</h2>
-            <span className="text-sm text-slate-600">{data.wave_counts[wave]} findings</span>
-          </div>
-          <p className="mb-3 text-xs text-slate-500">{WAVE_DESCRIPTION[wave]}</p>
-          {data.waves[wave].length === 0 ? (
-            <p className="text-sm text-slate-500">Empty.</p>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {groupItems(data.waves[wave]).map((group) => (
-                <Item key={group.item.finding.id} group={group} scanId={scanId} />
-              ))}
-            </ul>
-          )}
-        </section>
-      ))}
-    </div>
-  );
-}
-
-function Blockers({ chains }: { chains: BlockedChain[] }) {
-  if (chains.length === 0) return null;
-  const held = chains.reduce((total, chain) => total + chain.finding_count, 0);
-  return (
-    <section className="card">
-      <div className="mb-1 flex items-baseline gap-3">
-        <h2 className="font-semibold">What is standing in the way</h2>
-        <span className="text-sm text-slate-600">
-          {chains.length} distinct {chains.length === 1 ? "chain" : "chains"} holding {held}{" "}
-          {held === 1 ? "finding" : "findings"}
-        </span>
-      </div>
-      <p className="mb-3 text-xs text-slate-500">
-        The blocked rows below, grouped by the work they are waiting on and ordered with the
-        long-lead item first. Clearing one row clears every finding behind it.
-      </p>
-      <ul className="divide-y divide-slate-100">
-        {chains.map((chain, index) => (
-          <li key={index} className="grid gap-2 py-2 text-sm md:grid-cols-3">
-            <div className="md:col-span-2">
-              <ol className="list-decimal pl-4 text-xs">
-                {chain.prerequisites.map((p, position) => (
-                  <li key={position}>
-                    <code>{p.unmet}</code> — observed {p.observed ?? <em>nothing</em>}
-                  </li>
-                ))}
-              </ol>
-            </div>
-            <div className="text-xs">
-              <div className="font-medium">
-                {chain.finding_count} {chain.finding_count === 1 ? "finding" : "findings"}
-              </div>
-              <div className="font-mono text-slate-600">{chain.assets.join(", ")}</div>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 // One `AES.new(...)` call is not an asset; a file's use of AES is. A library
 // that calls it 62 times in one module has one thing to change there, and 62
 // identical rows bury every row that is not identical. The grouping is a
 // presentation choice only — /roadmap still returns every finding, the findings
 // table still lists them, and the count on each row says how many there were.
-type ItemGroup = { item: RoadmapItem; occurrences: number; lines: string[] };
+type ItemGroup = { item: RoadmapItem; occurrences: number; lines: string[]; file: string; wave: Wave; index: number };
 
 // The scorer stores every Mosca input on the row and the provenance of the two
 // that are assumptions. Read as recorded, never relabelled: the rationale is an
@@ -141,8 +50,8 @@ function source(rationale: Record<string, unknown> | null, key: string): string 
   return typeof value === "string" ? value : null;
 }
 
-function groupItems(items: RoadmapItem[]): ItemGroup[] {
-  const groups = new Map<string, ItemGroup>();
+function groupItems(items: RoadmapItem[], wave: Wave): Omit<ItemGroup, "index">[] {
+  const groups = new Map<string, Omit<ItemGroup, "index">>();
   for (const item of items) {
     const location = item.finding.evidence_location ?? "";
     const cut = location.lastIndexOf(":");
@@ -168,88 +77,371 @@ function groupItems(items: RoadmapItem[]): ItemGroup[] {
       existing.occurrences += 1;
       if (line) existing.lines.push(line);
     } else {
-      groups.set(key, { item, occurrences: 1, lines: line ? [line] : [] });
+      groups.set(key, { item, occurrences: 1, lines: line ? [line] : [], file, wave });
     }
   }
   return [...groups.values()];
 }
 
-function Item({ group, scanId }: { group: ItemGroup; scanId: string }) {
-  const { item, occurrences, lines } = group;
-  const location = item.finding.evidence_location ?? "";
-  const cut = location.lastIndexOf(":");
-  const file = cut > 0 ? location.slice(0, cut) : location;
-  return (
-    <li className="grid gap-2 py-2 text-sm md:grid-cols-3">
-      <div>
-        <div className="font-medium">
-          {describeAlgorithm(item.finding)}{" "}
-          <span className="text-xs font-normal text-slate-500">{titleCase(item.finding.primitive)}</span>
-        </div>
-        <div className="font-mono text-xs text-slate-600">
-          {occurrences > 1 ? file : item.finding.evidence_location}
-        </div>
-        {occurrences > 1 && (
-          <div className="text-xs text-slate-500">
-            <strong>{occurrences} uses</strong> · lines {lines.slice(0, 6).join(", ")}
-            {lines.length > 6 && ` and ${lines.length - 6} more`}
-          </div>
-        )}
-        <div className="mt-1 text-xs">
-          {item.verdict && <span className={`badge mr-1 ${VERDICT_BADGE[item.verdict]}`}>{VERDICT_LABEL[item.verdict]}</span>}
-          {item.urgency_years !== null ? (
-            <span className="text-slate-600">overdue by {item.urgency_years} years</span>
-          ) : (
-            <span className="text-slate-500">Mosca not applied</span>
-          )}
-          {/* The inputs beside the answer. X and Y both vary per finding, so
-              "overdue by 9 years" on its own no longer says which assumption
-              produced it. */}
-          <div className="text-slate-500">
-            X = {mosca(item.rationale, "x_years") ?? "—"}, Y = {mosca(item.rationale, "y_years") ?? "—"},
-            Z = {mosca(item.rationale, "z_years") ?? "—"}
-          </div>
-          {source(item.rationale, "x_source") && (
-            <div className="text-slate-500">X from {source(item.rationale, "x_source")}</div>
-          )}
-          {source(item.rationale, "y_source") && (
-            <div className="text-slate-500">Y from {source(item.rationale, "y_source")}</div>
-          )}
-        </div>
-      </div>
-      <div className="md:col-span-2">
-        {item.recommendations.length === 0 && (
-          <span className="text-xs text-slate-500">
-            No recommendation row — the verdict is not a migration item.
+// "Wave 0 — broken today" → ["Wave 0", "Broken today"]
+function splitLabel(wave: Wave): [string, string] {
+  const [head, tail = ""] = WAVE_LABEL[wave].split(" — ");
+  return [head, tail.charAt(0).toUpperCase() + tail.slice(1)];
+}
+
+export default function Roadmap() {
+  const { scanId = "" } = useParams();
+  const navigate = useNavigate();
+  const [data, setData] = useState<RoadmapData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<Wave>>(new Set());
+
+  useEffect(() => {
+    api.roadmap(scanId).then(setData).catch((err) => setError(err.message));
+  }, [scanId]);
+
+  // Rows numbered once, in wave order, so "#7" names the same item however
+  // the groups are opened and closed.
+  const groups = useMemo(() => {
+    if (!data) return {} as Record<Wave, ItemGroup[]>;
+    let n = 0;
+    const out = {} as Record<Wave, ItemGroup[]>;
+    for (const wave of WAVES) {
+      out[wave] = groupItems(data.waves[wave], wave).map((group) => ({ ...group, index: ++n }));
+    }
+    return out;
+  }, [data]);
+
+  const findingsLink = (group: ItemGroup) =>
+    `/scans/${scanId}/findings?q=${encodeURIComponent(group.occurrences > 1 ? group.file : (group.item.finding.evidence_location ?? ""))}`;
+
+  const columns: Column<ItemGroup>[] = [
+    { key: "n", header: "#", width: 44, skeletonWidth: 14, render: (g) => <span className={s.num}>{g.index}</span> },
+    {
+      key: "asset",
+      header: "Asset",
+      skeletonWidth: 160,
+      render: (g) => (
+        <span className={s.asset}>
+          <span className={s.assetName} title={describeAlgorithm(g.item.finding)}>
+            {describeAlgorithm(g.item.finding)}{" "}
+            <span className={s.groupMeta}>{titleCase(g.item.finding.primitive)}</span>
           </span>
-        )}
-        {item.recommendations.map((rec) => (
-          <div key={rec.id} className="mb-1 rounded border border-slate-200 p-2 text-xs">
-            <span className={`badge ${STATUS_BADGE[rec.status as RecommendationStatus]}`}>{STATUS_LABEL[rec.status]}</span>{" "}
-            {rec.target ? <strong>{rec.target}</strong> : <em>no target</em>}
+          <span className={s.assetLoc} title={g.item.finding.evidence_location ?? undefined}>
+            {g.occurrences > 1
+              ? `${g.file} · ${g.occurrences} uses · lines ${g.lines.slice(0, 6).join(", ")}${g.lines.length > 6 ? ` +${g.lines.length - 6}` : ""}`
+              : g.item.finding.evidence_location}
+          </span>
+        </span>
+      ),
+    },
+    {
+      key: "current",
+      header: "Current",
+      width: 140,
+      skeletonWidth: 90,
+      render: (g) => (
+        <span className={s.stack}>
+          <span className={s.mono} title={g.item.finding.algorithm_name}>
+            {g.item.finding.algorithm_name}
+          </span>
+          <span className={s.subSans}>{titleCase(g.item.finding.source_layer)} · {g.item.finding.confidence}</span>
+        </span>
+      ),
+    },
+    {
+      key: "target",
+      header: "Target",
+      width: 190,
+      skeletonWidth: 130,
+      render: (g) => {
+        const rec = g.item.recommendations[0];
+        if (!rec) return <span className={s.subSans}>No recommendation row</span>;
+        return (
+          <span className={s.stack}>
+            <span className={rec.target ? s.target : s.subSans} title={rec.target ?? undefined}>
+              {rec.target ?? "no target"}
+            </span>
             {rec.hybrid_target && rec.hybrid_target !== rec.target && (
-              <span className="text-slate-600"> · hybrid {rec.hybrid_target}</span>
+              <span className={s.sub}>hybrid {rec.hybrid_target}</span>
             )}
-            {rec.action_class && <span className="text-slate-600"> · {titleCase(rec.action_class)}</span>}
-            {rec.prerequisites && rec.prerequisites.length > 0 && (
-              <ol className="mt-1 list-decimal pl-4">
-                {rec.prerequisites.map((p, index) => (
+          </span>
+        );
+      },
+    },
+    {
+      key: "mosca",
+      header: "Mosca",
+      width: 100,
+      align: "right",
+      skeletonWidth: 40,
+      render: (g) => {
+        const r = g.item.rationale;
+        // The inputs beside the answer. X and Y both vary per finding, so
+        // "overdue by 9 years" on its own no longer says which assumption
+        // produced it.
+        const inputs = `X${mosca(r, "x_years") ?? "—"} Y${mosca(r, "y_years") ?? "—"} Z${mosca(r, "z_years") ?? "—"}`;
+        const provenance = [source(r, "x_source") && `X from ${source(r, "x_source")}`, source(r, "y_source") && `Y from ${source(r, "y_source")}`]
+          .filter(Boolean)
+          .join("\n");
+        return (
+          <span className={s.mosca} title={provenance || undefined}>
+            <span className={s.moscaValue}>{g.item.urgency_years !== null ? `+${g.item.urgency_years} y` : "—"}</span>
+            <span className={s.sub}>{g.item.urgency_years !== null ? inputs : "not applied"}</span>
+          </span>
+        );
+      },
+    },
+    {
+      key: "effort",
+      header: "Effort",
+      width: 116,
+      skeletonWidth: 30,
+      render: (g) => {
+        const action = g.item.recommendations[0]?.action_class;
+        return action ? <span className={s.effort}>{titleCase(action)}</span> : <span className={s.subSans}>—</span>;
+      },
+    },
+    {
+      key: "status",
+      header: "Status",
+      width: 230,
+      skeletonWidth: 70,
+      render: (g) => {
+        const rec = g.item.recommendations[0];
+        if (!rec) return <span className={s.subSans}>The verdict is not a migration item</span>;
+        const first = rec.prerequisites?.[0];
+        return (
+          <span className={s.status}>
+            <SeverityBadge tone={STATUS_TONE[rec.status]}>{STATUS_LABEL[rec.status]}</SeverityBadge>
+            <span className={s.subSans} title={rec.side_effects ?? undefined}>
+              {first
+                ? `${first.unmet} — observed ${first.observed ?? "nothing"}${(rec.prerequisites?.length ?? 0) > 1 ? ` (+${rec.prerequisites!.length - 1})` : ""}`
+                : (rec.side_effects ?? (rec.action_class ? titleCase(rec.action_class) : ""))}
+            </span>
+          </span>
+        );
+      },
+    },
+    {
+      key: "refs",
+      header: "References",
+      width: 150,
+      skeletonWidth: 80,
+      render: (g) => <span className={s.refs}>{g.item.recommendations[0]?.source_citation ?? "—"}</span>,
+    },
+  ];
+
+  const header = (subtitle: string) => (
+    <PageHeader
+      title="Roadmap"
+      subtitle={subtitle}
+      actions={
+        <Link to={`/scans/${scanId}`} className={buttonClass("secondary")}>
+          Mosca inputs
+        </Link>
+      }
+    />
+  );
+
+  if (error) {
+    return (
+      <>
+        {header("PQC migration plan ordered by Mosca urgency.")}
+        <PageBody>
+          <StatePanel variant="error" tag="Roadmap not generated" meta={shortId(scanId)} title="The migration plan could not be loaded" log={[error]} />
+        </PageBody>
+      </>
+    );
+  }
+
+  // ---- scoring / loading ----
+  if (!data) {
+    return (
+      <>
+        {header("Loading the migration plan…")}
+        <PageBody>
+          <div className={s.cards}>
+            {WAVES.map((wave) => {
+              const [head, title] = splitLabel(wave);
+              return (
+                <div key={wave} className={s.card} style={toneVars(WAVE_TONE[wave])}>
+                  <span className={s.cardHead}>
+                    <span className={s.cardSquare} aria-hidden="true" />
+                    <Caps>{head}</Caps>
+                    <span className={s.cardTitle}>{title}</span>
+                  </span>
+                  <span className={s.skeletonCard}>— loading…</span>
+                </div>
+              );
+            })}
+            <div className={s.card}>
+              <Caps>Blocking prerequisites</Caps>
+              <span className={s.skeletonCard}>computed with the plan</span>
+            </div>
+          </div>
+          <Panel flush className={s.tablePanel} bodyClassName={s.tableBody}>
+            <DataTable className={s.table} columns={columns} rows={[]} rowKey={(g) => String(g.index)} loadingRows={10} />
+          </Panel>
+        </PageBody>
+      </>
+    );
+  }
+
+  const itemCount = WAVES.reduce((sum, wave) => sum + (groups[wave]?.length ?? 0), 0);
+  const findingCount = WAVES.reduce((sum, wave) => sum + (data.wave_counts[wave] ?? 0), 0);
+
+  // ---- nothing to migrate ----
+  if (findingCount === 0) {
+    return (
+      <>
+        {header("PQC migration plan ordered by Mosca urgency.")}
+        <PageBody>
+          <StatePanel
+            variant="empty"
+            tag="Nothing to migrate"
+            tagTone="safe"
+            meta={`${shortId(scanId)} · ${data.unscored} finding${data.unscored === 1 ? "" : "s"}`}
+            title="No findings require a migration item"
+            actions={
+              <Link to={`/scans/${scanId}/findings`} className={buttonClass("primary")}>
+                Open findings
+              </Link>
+            }
+          >
+            {data.unscored > 0
+              ? `Every finding in this scan (${data.unscored}) was classified as needing no migration, so no wave holds anything.`
+              : "This scan has no findings, so there is nothing to plan."}
+          </StatePanel>
+        </PageBody>
+      </>
+    );
+  }
+
+  const blockedIn = (wave: Wave) =>
+    (groups[wave] ?? []).filter((g) => g.item.recommendations.some((rec) => rec.status === "blocked")).length;
+  const held = data.blocked_chains.reduce((sum, chain) => sum + chain.finding_count, 0);
+
+  const sections: TableSection<ItemGroup>[] = WAVES.filter((wave) => (groups[wave]?.length ?? 0) > 0).map((wave) => {
+    const open = !collapsed.has(wave);
+    const blocked = blockedIn(wave);
+    return {
+      key: wave,
+      rows: open ? groups[wave] : [],
+      header: (
+        <span className={s.group} style={toneVars(WAVE_TONE[wave])}>
+          <button
+            type="button"
+            className={s.groupToggle}
+            aria-expanded={open}
+            onClick={() =>
+              setCollapsed((current) => {
+                const next = new Set(current);
+                if (next.has(wave)) next.delete(wave);
+                else next.add(wave);
+                return next;
+              })
+            }
+          >
+            <Icon name={open ? "chevronDown" : "chevronRight"} size={14} />
+            {WAVE_LABEL[wave]}
+          </button>
+          <span className={s.groupMeta}>
+            {groups[wave].length} item{groups[wave].length === 1 ? "" : "s"} · {data.wave_counts[wave]} finding
+            {data.wave_counts[wave] === 1 ? "" : "s"}
+            {blocked > 0 && ` · ${blocked} blocked`}
+          </span>
+          <span className={s.groupNote} title={WAVE_DESCRIPTION[wave]}>
+            {WAVE_DESCRIPTION[wave]}
+          </span>
+        </span>
+      ),
+    };
+  });
+
+  return (
+    <>
+      {header(
+        `${itemCount} item${itemCount === 1 ? "" : "s"} from ${findingCount} finding${findingCount === 1 ? "" : "s"}, ordered by Mosca urgency within each wave. Z = ${data.z_years_used ?? "—"}.`,
+      )}
+      <PageBody>
+        {data.z_years_used === null && (
+          <Banner
+            tone="warn"
+            title="Not yet scored against a Z"
+            actions={
+              <Link to={`/scans/${scanId}`} className={buttonClass("secondary")}>
+                Open Mosca inputs
+              </Link>
+            }
+          >
+            Z is set on the Overview, beside the waves it moves. Until then Mosca urgency is not applied.
+          </Banner>
+        )}
+
+        <div className={s.cards}>
+          {WAVES.map((wave) => {
+            const [head, title] = splitLabel(wave);
+            const items = groups[wave]?.length ?? 0;
+            const blocked = blockedIn(wave);
+            return (
+              <div key={wave} className={s.card} style={toneVars(WAVE_TONE[wave])} title={WAVE_DESCRIPTION[wave]}>
+                <span className={s.cardHead}>
+                  <span className={s.cardSquare} aria-hidden="true" />
+                  <Caps>{head}</Caps>
+                  <span className={s.cardTitle}>{title}</span>
+                </span>
+                <span className={s.cardCount}>
+                  <span className={s.cardNumber}>{items}</span>
+                  <span className={s.cardSub}>{blocked > 0 ? `${blocked} blocked` : `${data.wave_counts[wave]} findings`}</span>
+                </span>
+              </div>
+            );
+          })}
+          <div className={s.card}>
+            <Caps>Blocking prerequisites</Caps>
+            {data.blocked_chains.length === 0 ? (
+              <span className={s.cardSub}>Nothing is blocked.</span>
+            ) : (
+              <ul className={s.blockers} title={`${data.blocked_chains.length} chains holding ${held} findings`}>
+                {data.blocked_chains.slice(0, 4).map((chain, index) => (
                   <li key={index}>
-                    <code>{p.unmet}</code> — observed {p.observed ?? <em>nothing</em>}
-                    {p.observed_at && <span className="text-slate-500"> at {p.observed_at}</span>}
-                    {p.note && <span className="text-slate-500"> · {p.note}</span>}
+                    <span className={s.blockerText} title={chain.prerequisites.map((p) => `${p.unmet} — observed ${p.observed ?? "nothing"}`).join("\n")}>
+                      {chain.prerequisites[0]?.unmet}
+                      {chain.prerequisites.length > 1 && ` (+${chain.prerequisites.length - 1})`}
+                    </span>
+                    <span className={s.blockerCount} title={chain.assets.join(", ")}>
+                      {chain.finding_count}
+                    </span>
                   </li>
                 ))}
-              </ol>
+                {data.blocked_chains.length > 4 && (
+                  <li>
+                    <span className={s.cardSub}>{data.blocked_chains.length - 4} more chains</span>
+                  </li>
+                )}
+              </ul>
             )}
-            {rec.side_effects && <div className="mt-1 text-slate-700">{rec.side_effects}</div>}
-            <div className="text-slate-500">{rec.source_citation}</div>
           </div>
-        ))}
-        <Link to={`/scans/${scanId}/findings?q=${encodeURIComponent(occurrences > 1 ? file : item.finding.evidence_location ?? "")}`} className="text-xs underline">
-          open in findings
-        </Link>
-      </div>
-    </li>
+        </div>
+
+        <Panel flush className={s.tablePanel} bodyClassName={s.tableBody}>
+          <DataTable
+            className={s.table}
+            wrap
+            columns={columns}
+            sections={sections}
+            rowKey={(g) => `${g.wave}-${g.index}`}
+            onRowClick={(g) => navigate(findingsLink(g))}
+          />
+        </Panel>
+        {data.unscored > 0 && (
+          <span className={s.footnote}>
+            {data.unscored} finding{data.unscored === 1 ? "" : "s"} need no migration and are not listed · {WAVE_SHORT.verify} holds
+            low-confidence items to confirm first.
+          </span>
+        )}
+      </PageBody>
+    </>
   );
 }

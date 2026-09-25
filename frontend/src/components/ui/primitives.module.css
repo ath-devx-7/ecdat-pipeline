@@ -1,0 +1,272 @@
+/* ---- badge ---- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--badge-h);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--tone-bg);
+  color: var(--tone-fg);
+  font: 500 var(--fs-2xs) / 1 var(--font-sans);
+  white-space: nowrap;
+}
+
+.square {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--tone-solid);
+}
+
+.dotLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--tone-solid);
+}
+
+/* ---- mono ---- */
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.muted {
+  color: var(--text-help);
+}
+
+.truncate {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* ---- button ---- */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 12px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 var(--fs-sm) / 1 var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+
+.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--accent-text);
+}
+
+.button:disabled {
+  border-color: var(--sev-unknown-bg);
+  background: var(--sev-unknown-bg);
+  color: var(--text-help);
+  font-weight: 400;
+  cursor: not-allowed;
+}
+
+.small {
+  height: 26px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-link);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- panel ---- */
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 36px;
+  padding: 0 var(--sp-3);
+  border-bottom: var(--bw) solid var(--divider);
+}
+
+.panelHeadMeta {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.caps {
+  color: var(--text-3);
+  font: 600 var(--fs-2xs) / 1.2 var(--font-sans);
+  letter-spacing: var(--caps-tracking);
+  text-transform: uppercase;
+}
+
+.panelBody {
+  padding: var(--sp-3);
+}
+
+.flush {
+  padding: 0;
+}
+
+/* ---- banner ---- */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-3);
+  border: var(--bw) solid var(--banner-border);
+  border-radius: var(--radius-sm);
+  background: var(--banner-bg);
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.bannerIcon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--banner-fg);
+}
+
+.bannerText {
+  flex: 1;
+  min-width: 0;
+}
+
+.bannerTitle {
+  color: var(--banner-fg);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.bannerActions {
+  display: flex;
+  flex: none;
+  gap: var(--sp-2);
+  align-self: center;
+}
+
+.error {
+  --banner-bg: var(--banner-error-bg);
+  --banner-border: var(--banner-error-border);
+  --banner-fg: var(--banner-error-fg);
+}
+
+.warn {
+  --banner-bg: var(--banner-warn-bg);
+  --banner-border: var(--banner-warn-border);
+  --banner-fg: var(--banner-warn-fg);
+}
+
+.info {
+  --banner-bg: var(--banner-info-bg);
+  --banner-border: var(--banner-info-border);
+  --banner-fg: var(--banner-info-fg);
+}
+
+/* ---- progress ---- */
+.track {
+  height: 4px;
+  overflow: hidden;
+  background: var(--accent-track);
+}
+
+.fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.fillDone {
+  background: var(--sev-safe);
+}
+
+/* ---- skeleton ---- */
+.skeleton {
+  display: block;
+  height: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--skeleton);
+}
+
+.skeletonLight {
+  background: var(--skeleton-2);
+}
+
+/* ---- KPI tile ---- */
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: var(--sp-3);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.kpiLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kpiSquare {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  background: var(--tone-solid, var(--text));
+}
+
+.kpiValue {
+  color: var(--text);
+  font: 500 var(--fs-kpi) / 1.2 var(--font-mono);
+}
+
+.kpiSub {
+  overflow: hidden;
+  color: var(--text-help);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

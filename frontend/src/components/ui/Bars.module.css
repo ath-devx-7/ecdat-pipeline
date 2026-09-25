@@ -1,0 +1,94 @@
+/* ---- stacked bar (findings by verdict) ---- */
+.stack {
+  display: flex;
+  gap: 2px;
+  height: 22px;
+}
+
+.segment {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  background: var(--tone-solid);
+  color: #fff;
+  font: 600 var(--fs-2xs) / 1 var(--font-mono);
+  white-space: nowrap;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: 10px;
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legendSquare {
+  width: 8px;
+  height: 8px;
+  background: var(--tone-solid);
+}
+
+.legendCount {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+}
+
+.emptyStack {
+  height: 22px;
+  background: var(--bar-track);
+}
+
+/* ---- horizontal bar list ---- */
+.list {
+  display: grid;
+  grid-template-columns: minmax(0, var(--label-w, 140px)) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.label {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labelMono {
+  font-family: var(--font-mono);
+}
+
+.labelOff {
+  color: var(--text-help);
+}
+
+.track {
+  height: 8px;
+  background: var(--bar-track);
+}
+
+.fill {
+  height: 100%;
+  background: var(--tone-solid, var(--bar-neutral));
+}
+
+.value {
+  min-width: 24px;
+  color: var(--text);
+  font: 400 var(--fs-xs) / 1 var(--font-mono);
+  text-align: right;
+}
+
+.valueOff {
+  color: var(--text-help);
+}

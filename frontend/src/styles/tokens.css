@@ -1,0 +1,147 @@
+/* Design tokens, from docs/designs/TOKENS.md. Colours were sampled from the
+   mockups, so change a value here only alongside that file. */
+
+:root {
+  /* type */
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --fs-2xs: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --fs-kpi: 26px;
+  --lh: 1.4;
+  --caps-tracking: 0.08em;
+
+  /* neutrals */
+  --canvas: #f3f3f2;
+  --surface: #ffffff;
+  --surface-sunken: #f7f7f6;
+  --surface-page-head: #fafaf9;
+  --surface-disabled: #f5f5f4;
+  --border: #e2e2e0;
+  --border-subtle: #e9e9e8;
+  --divider: #f0f0ee;
+  --text: #1b1b1a;
+  --text-2: #52524e;
+  --text-3: #5f5f5b;
+  --text-help: #62625e;
+  --text-faint: #8a8a85;
+  --skeleton: #ececea;
+  --skeleton-2: #f0f0ee;
+
+  /* sidebar */
+  --sb-bg: #1c1c1b;
+  --sb-divider: #2a2a28;
+  --sb-active: #30302e;
+  --sb-text: #b0b0ab;
+  --sb-text-strong: #ffffff;
+  --sb-text-muted: #7c7c77;
+  --sb-count: #8e8e8a;
+  --sb-dot-safe: #7fb58a;
+  --sb-dot-info: #86a9c4;
+  --sb-dot-high: #d9a45a;
+  --sb-dot-critical: #d98b84;
+  --sb-dot-unknown: #8e8e8a;
+
+  /* accent */
+  --accent: #35607f;
+  --accent-text: #2c5373;
+  --accent-link: #3e6785;
+  --accent-ink: #1f3d52;
+  --accent-bg: #e2eaf0;
+  --accent-bg-soft: #f0f4f7;
+  --accent-select: #e8eff5;
+  --accent-hover: #f6f8fa;
+  --accent-option: #f1f5f8;
+  --accent-border: #dae3eb;
+  --accent-border-strong: #829db0;
+  --accent-chip-border: #c3d1db;
+  --accent-track: #d6e0e8;
+
+  /* severity: solid (squares, dots, bars), bg (badge fill), fg (badge text) */
+  --sev-critical: #b0473f;
+  --sev-critical-bg: #f5e6e3;
+  --sev-critical-fg: #8f2a24;
+  --sev-high: #c07a1c;
+  --sev-high-bg: #f7ebd8;
+  --sev-high-fg: #7a4906;
+  --sev-medium: #a8912c;
+  --sev-medium-bg: #f2eed5;
+  --sev-medium-fg: #605312;
+  --sev-safe: #4d8659;
+  --sev-safe-bg: #e4efe6;
+  --sev-safe-fg: #2d6339;
+  --sev-unknown: #9a9a95;
+  --sev-unknown-bar: #8a8a85;
+  --sev-unknown-bg: #ebebe9;
+  --sev-unknown-fg: #51514c;
+  --sev-blocked: #7a7091;
+  --sev-blocked-bg: #eae8f0;
+  --sev-blocked-fg: #51496a;
+  --sev-info: var(--accent);
+  --sev-info-bg: var(--accent-bg);
+  --sev-info-fg: var(--accent-text);
+
+  /* banners */
+  --banner-error-bg: #f8ecea;
+  --banner-error-border: #ecd5d1;
+  --banner-error-fg: #8f2a24;
+  --banner-warn-bg: #fbf3e6;
+  --banner-warn-border: #ebdfca;
+  --banner-warn-fg: #6a3f05;
+  --banner-info-bg: var(--accent-bg-soft);
+  --banner-info-border: var(--accent-border);
+  --banner-info-fg: var(--accent-text);
+  --field-error-border: #dfb5b2;
+  --field-error-fg: #8f2a24;
+  --field-required-border: #c06c65;
+  --field-required-fg: #963833;
+
+  /* data viz */
+  --bar-track: #f0f0ee;
+  --bar-neutral: #6f8799;
+  --mosca-x: #b9c6cf;
+  --mosca-y: #6f8799;
+  --mosca-z: #e7e7e4;
+  --mosca-exposed-bg: #f2d9d5;
+  --mosca-exposed-border: #be6760;
+  --axis: #ececea;
+
+  /* drift diff */
+  --diff-weaker-bg: #f5dcd8;
+  --diff-weaker-fg: #5c1f1a;
+  --diff-stronger-bg: #dcebdf;
+  --diff-removed-bg: #ececea;
+
+  /* code */
+  --code-bg: #f7f7f6;
+  --code-highlight: #f7e9cf;
+  --code-lineno: #8a8a85;
+
+  /* spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* dimensions */
+  --sidebar-w: 233px;
+  --topbar-h: 44px;
+  --pagehead-h: 49px;
+  --row-h: 33px;
+  --control-h: 32px;
+  --badge-h: 18px;
+  --nav-item-h: 32px;
+  --state-max-w: 640px;
+
+  /* radius & borders */
+  --radius-sm: 2px;
+  --radius: 3px;
+  --radius-nav: 4px;
+  --bw: 1px;
+}

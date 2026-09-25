@@ -1,0 +1,91 @@
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+}
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 280px;
+  max-width: 100%;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 9px;
+  color: var(--text-help);
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 28px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: 400 var(--fs-xs) / 1 var(--font-sans);
+}
+
+.searchInput::placeholder {
+  color: var(--text-faint);
+}
+
+.select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: var(--bw) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.select:focus-within {
+  outline: 2px solid var(--accent-border-strong);
+  outline-offset: 1px;
+}
+
+.active {
+  border-color: var(--accent-border-strong);
+  background: var(--accent-option);
+}
+
+.selectLabel {
+  color: var(--text-2);
+}
+
+.selectValue {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.chevron {
+  color: var(--text-2);
+}
+
+/* The native select sits invisibly over the button face: keyboard and screen
+   readers get a real <select>, the eye gets the mockup's label/value look. */
+.native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.count {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
