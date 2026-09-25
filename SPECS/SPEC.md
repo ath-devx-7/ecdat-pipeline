@@ -29,14 +29,15 @@ Everything else exists to feed those two.
 
 | Layer | Choice |
 |---|---|
-| Backend | Python 3.11+, FastAPI |
-| DB | PostgreSQL 16 |
+| Backend | Python 3.12+, FastAPI |
+| DB | PostgreSQL 16 (SQLite for tests and local trials) |
 | ORM | SQLAlchemy 2.x + Alembic |
-| Frontend | React + Vite, Tailwind |
-| Charts | Recharts |
+| Frontend | React 19 + TypeScript + Vite, React Router; CSS modules over design tokens (Tailwind for its preflight reset only) |
+| Charts | Hand-built bar components (`components/ui/Bars.tsx`) |
+| Fonts | IBM Plex Sans / Mono, bundled via `@fontsource` — no runtime CDN |
 | PDF | WeasyPrint (HTML → PDF) |
 | CBOM | `cyclonedx-python-lib` |
-| Packaging | Docker Compose |
+| Packaging | Docker Compose (demo lab) |
 
 ### Execution model
 
@@ -56,48 +57,59 @@ Note in the README that async workers (Celery + Redis) are the production path. 
 ## 3. Repository layout
 
 ```
-ecdat/
+ecdat-pipeline/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                 FastAPI app, router mounting
-│   │   ├── config.py               settings via pydantic-settings
+│   │   ├── main.py                 FastAPI app, router mounting, /api/health
+│   │   ├── startup.py              policy load + validation, upload/archive sweep
+│   │   ├── config.py               settings via pydantic-settings (ECDAT_*)
 │   │   ├── db.py                   engine, session
-│   │   ├── models/                 SQLAlchemy models
-│   │   ├── schemas/                pydantic request/response
+│   │   ├── models/                 scan, finding, analysis, enums
+│   │   ├── schemas/                scans, results — pydantic request/response
 │   │   ├── api/
-│   │   │   ├── scans.py
-│   │   │   ├── findings.py
-│   │   │   ├── reports.py
-│   │   │   └── policy.py
+│   │   │   ├── scans.py            create, files, approve, CBOM in/out, report
+│   │   │   ├── uploads.py          browser folder upload, image tar upload
+│   │   │   └── findings.py         policy, overview, findings, alignment, roadmap, rescore
 │   │   ├── intake/
-│   │   │   ├── stage.py            folder / repo / image → directory
-│   │   │   ├── surface.py          file enumeration
-│   │   │   └── selection.py        permission gate
+│   │   │   ├── stage.py            folder / upload / repo / image / archive → directory
+│   │   │   ├── upload.py           untrusted manifest + tar handling, retention sweep
+│   │   │   ├── surface.py          file enumeration, exclusions, file cap
+│   │   │   └── selection.py        permission gate, per-file X
 │   │   ├── collectors/
-│   │   │   ├── base.py             Collector ABC
+│   │   │   ├── base.py             Collector ABC, ScanContext
 │   │   │   ├── code.py             Semgrep
 │   │   │   ├── binary.py           pyelftools
+│   │   │   ├── binary_yara.py      stub, returns []
 │   │   │   ├── certs.py            cryptography lib
 │   │   │   ├── config.py           format parsers
 │   │   │   ├── network.py          sslyze
 │   │   │   └── cbom_import.py      CycloneDX in
 │   │   ├── core/
+│   │   │   ├── policy_loader.py    YAML → validated, read-only pack
 │   │   │   ├── normalizer.py
 │   │   │   ├── alignment.py
 │   │   │   ├── policy.py
 │   │   │   ├── advisor.py
-│   │   │   └── risk.py
+│   │   │   ├── risk.py
+│   │   │   └── visibility.py       which verdicts every output shows
 │   │   ├── export/
 │   │   │   ├── cyclonedx.py
-│   │   │   └── pdf.py
+│   │   │   ├── pdf.py
+│   │   │   └── templates/report.html
 │   │   └── runner.py               orchestrates a scan end to end
 │   ├── policy/                     versioned YAML — see §6
-│   ├── semgrep_rules/              custom crypto rules
+│   ├── semgrep_rules/              crypto.yaml, local rules only
 │   ├── tests/
 │   └── alembic/
 ├── frontend/
-├── demo/                           deliberately weak targets — see §13
-├── docker-compose.yml
+│   ├── src/pages/                  the six screens — see §13
+│   ├── src/components/ui/          AppShell and shared components
+│   ├── src/styles/tokens.css
+│   └── docs/designs/               mockups + TOKENS.md
+├── demo/                           deliberately weak targets + docker-compose.yml — see §14
+├── SPECS/SPEC.md                   this file
+├── ECDAT_Pipeline.pdf              pipeline diagram
+├── ecdat.pgerd                     schema ERD
 └── README.md
 ```
 
@@ -106,8 +118,9 @@ ecdat/
 ## 4. Scan lifecycle
 
 ```
+0. POST /api/uploads[/image]       upload and docker_archive sources only: store the bytes, return an id
 1. POST /api/scans                 create scan, mode + inputs (probe_only also sets X)
-2. Stage                           folder / clone / unpack image → work dir
+2. Stage                           folder / upload / clone / unpack image or archive → work dir
 3. Surface scan                    enumerate every file, no parsing
 4. GET  /api/scans/{id}/files      return file tree to UI
 5. POST /api/scans/{id}/approve    approved path list, plus X for the scan and per file
@@ -122,7 +135,14 @@ ecdat/
 ### Scan modes
 
 - **`probe_only`** — one or more `host:port` targets. Steps 2–6 skipped entirely except the network collector. Alignment check is a **no-op**; the API must return `alignment: {status: "skipped", reason: "no config findings to compare"}` so the UI can say so explicitly rather than showing an empty panel.
-- **`files`** — folder / repo / image upload. Full flow, no probe.
+- **`files`** — full flow, no probe. Sources:
+  - `folder` — a path on the ECDAT host, read in place (API only).
+  - `upload` — a folder picked in the browser, posted to `/api/uploads`. The browser drops vendored trees and build output first; the server treats the path manifest as untrusted.
+  - `github` — cloned `--depth 1`.
+  - `docker_image` — `docker save` on the ECDAT host, layers merged in manifest order (API only: needs a local daemon).
+  - `docker_archive` — a `docker save` tar or OCI layout uploaded to `/api/uploads/image`, unpacked exactly as `docker_image`. Absolute paths, `..` and every link type inside a layer are dropped.
+
+  Uploads and archives nobody turned into a scan are swept after `upload_retention_hours` (24).
 - **`files_and_probe`** — both. This is the only mode where alignment produces output.
 
 Probe host is **entered explicitly by the user**. Never inferred from scanned files. (Inference is a roadmap item.)
@@ -131,7 +151,7 @@ Probe host is **entered explicitly by the user**. Never inferred from scanned fi
 
 ## 5. Data model
 
-Seven tables. Findings and assets are observations; algorithms and pqc_targets are loaded read-only from YAML at startup.
+Eight tables, all keyed to `scans.id` with `ON DELETE CASCADE`. Findings are observations; algorithms and pqc_targets are loaded read-only from YAML at startup and are not tables. Five Alembic revisions: initial schema, `scans.diagnostics`, `source_type` gains `upload`, `source_type` gains `docker_archive`, `scan_files.data_lifetime_years`.
 
 ### `scans`
 | column | type | notes |
@@ -146,6 +166,7 @@ Seven tables. Findings and assets are observations; algorithms and pqc_targets a
 | status | enum | staging \| awaiting_approval \| running \| complete \| partial \| failed |
 | file_count | int | |
 | approved_count | int | |
+| diagnostics | jsonb, null | per collector: ran or not, files handed, findings returned, why it stopped; plus approved files vs findings per extension. Null for scans that predate it — never an invented empty object |
 | created_at, completed_at | timestamptz | |
 
 ### `scan_files`
@@ -220,11 +241,20 @@ The core table. One row per observed crypto use.
 
 **Store the inputs, not just the output.** An auditor must be able to reconstruct any wave assignment from the row.
 
+### `provenance_blobs`
+| column | type | notes |
+|---|---|---|
+| id, scan_id | | |
+| raw_document | jsonb | filename, content type, byte length, SHA-256, source tool, and the uploaded bytes as a string — see §7.6 |
+| created_at | timestamptz | |
+
 ---
 
 ## 6. Policy files
 
-Live in `backend/policy/`, versioned in git, loaded **read-only** into Postgres at startup. No API endpoint writes to them. Every entry carries a `source` citation — reject any entry without one at load time.
+Live in `backend/policy/`, versioned in git, loaded **read-only** at startup into an immutable in-process pack. No API endpoint writes to them. Every entry carries a `source` citation — reject any entry without one at load time. A condition key or `requires` clause the engine cannot evaluate is also refused at load: a typo there would silently widen a rule or drop a prerequisite.
+
+Five files: `version.yaml`, `algorithms.yaml`, `pqc_targets.yaml`, `algorithm_aliases.yaml` (§8), `named_groups.yaml` (§7.5).
 
 ### `policy/version.yaml`
 ```yaml
@@ -351,6 +381,10 @@ targets:
 
 Every scan stamps `policy_version`. Dashboard shows the version and its publish date, and displays a warning banner when older than `staleness_warning_days`. This matters because an air-gapped install cannot fetch updates — a human must carry the policy pack in deliberately.
 
+### Visibility
+
+`quantum_safe` findings are stored and verdicted like any other — the policy engine must be able to say AES is safe, and readiness needs them as its numerator — but by default they are left out of the findings table, roadmap, CycloneDX export and PDF (`ECDAT_HIDE_QUANTUM_SAFE`, default `true`). One module (`core/visibility.py`) makes this decision for every output so no two can disagree about what the user is looking at.
+
 ---
 
 ## 7. Collectors
@@ -364,11 +398,13 @@ class Collector(ABC):
     def collect(self, ctx: ScanContext) -> list[RawFinding]: ...
 ```
 
-`ScanContext` carries: work dir, approved file paths, probe targets, timeouts. A collector that raises returns an empty list and marks the scan `partial` — never kills the run.
+`ScanContext` carries: work dir, approved file paths, probe targets, timeouts. `ScanContext.iter_files()` is the only way a collector reaches the filesystem. A collector that raises returns an empty list and marks the scan `partial` — never kills the run.
+
+**Diagnostics.** Every run records, per collector, whether it ran, how many approved files it was handed, how many findings came back and why it stopped, plus approved files vs findings per extension, on `scans.diagnostics`. A `partial` status must say *what* degraded; "300 `.go` files, 0 findings, no Go rules" should be readable, not inferred.
 
 ### 7.1 Code scan — Semgrep
 
-Run Semgrep over approved paths only, with `--json`. Ship custom rules in `semgrep_rules/crypto.yaml` plus pull relevant public rules.
+Run Semgrep over approved paths only, with `--json --metrics=off`, against the local rule file `semgrep_rules/crypto.yaml` **only**. Never fetch a registry ruleset — that would break §1. Rules ship for Python, Java, C, Go and JavaScript/TypeScript (52 rules). Semgrep is started for a wider extension list than the rules cover, and startup logs every extension no rule stands behind — a visible gap, not a reason to refuse to start. An out-of-memory on one file keeps everything already found and marks the scan `partial`.
 
 Detect:
 - Weak hashes: `hashlib.md5(...)`, `hashlib.sha1(...)`, Java `MessageDigest.getInstance("MD5")`
@@ -402,13 +438,17 @@ Extract:
 
 ### 7.3 Certificates — `cryptography`
 
-Walk approved paths. Identify candidates by extension (`.pem .crt .cer .der .p12 .pfx`) **and** by content sniffing for `-----BEGIN CERTIFICATE-----` inside other files (configs frequently embed them).
+Walk approved paths. Identify candidates by extension (`.pem .crt .cer .der`) **and** by content sniffing for `-----BEGIN CERTIFICATE-----` inside other files (configs frequently embed them).
 
-Parse and record: public key algorithm and size, `signature_algorithm_oid`, `not_valid_before` / `not_valid_after`, issuer, subject, self-signed flag, SAN list.
+Parse and record: public key algorithm and size, `signature_algorithm_oid`, `not_valid_before` / `not_valid_after`, issuer, subject, serial, self-signed flag, SAN list.
 
 Emit findings for: SHA-1 signature algorithm, RSA key < 2048, expired or expiring within 90 days, self-signed in a non-dev path.
 
-**Private keys:** if a file matches `-----BEGIN * PRIVATE KEY-----`, record **only** path, size, and POSIX permissions. Do **not** parse it. Do not load its bytes beyond the header check. Emit a hygiene finding if world-readable.
+**Undecodable extensions.** `cryptography` decodes every extension on first access, so one it rejects (an SCT list naming an unsupported signature algorithm, a malformed SCT length) makes *all* of them unreadable. That is one certificate's problem, not the collector's: key, signature and validity come from the TBS certificate and are still emitted. Record the reason as `extensions_error` in the evidence, so an empty SAN list is never mistaken for a certificate that has none.
+
+**Private keys:** if a file matches `-----BEGIN * PRIVATE KEY-----`, record **only** path, size, and POSIX permissions. Do **not** parse it. Do not load its bytes beyond the header check — a bundle with a certificate above its key still reports the certificate. Emit a hygiene finding if world-readable. Where the OS carries no POSIX mode (NTFS), record permissions as unavailable rather than inventing one.
+
+**`.p12` / `.pfx` containers are key material and are never opened** — path, size and permissions only, same as a private key.
 
 `confidence: high`. `source_layer: artifact`.
 
@@ -425,7 +465,7 @@ Format-specific parsers, each returning findings with `source_layer: config`:
 | Apache `ssl.conf` | `SSLProtocol`, `SSLCipherSuite`, `SSLCertificateFile`, `SSLCertificateKeyFile` | declared protocols, suites, cert paths |
 | `ssh_config` | `Ciphers`, `KexAlgorithms`, `MACs`, `HostKeyAlgorithms` | declared client-side SSH crypto |
 
-Use `crossplane` for nginx rather than regex. `configparser` handles openssl.cnf adequately. The other two are plain key-value.
+Use `crossplane` for nginx rather than regex, and do not follow `include` directives — an included file may not be approved. `configparser` handles openssl.cnf adequately. The rest are plain key-value.
 
 Detect these files by name pattern anywhere in the approved tree, not by fixed path.
 
@@ -456,7 +496,7 @@ Emit findings for:
 
 Accept an uploaded CycloneDX 1.6 JSON. Parse with `cyclonedx-python-lib`. Map each `cryptographic-asset` component into a finding, taking algorithm, primitive, OID and `evidence.occurrences` where present.
 
-Store the raw uploaded document unparsed in a `provenance_blobs` table. Never re-parse it — it exists so a disputed finding can be traced to exactly what the source tool said.
+Store the raw uploaded document unparsed in a `provenance_blobs` table — the bytes as a string, with their length and SHA-256, because JSONB would not preserve them. Never re-parse it — it exists so a disputed finding can be traced to exactly what the source tool said. Never copy a key-material `value` field into a finding. An import re-runs the analysis for the scan.
 
 `confidence`: inherit from the source if declared, else `medium`. `source_layer`: `source` unless the document says otherwise.
 
@@ -468,7 +508,7 @@ Maps six incompatible output shapes onto the `findings` schema. Two jobs beyond 
 
 ### Identity resolution
 
-`SHA-1`, `sha1`, `SHA1WithRSA`, and OID `1.3.14.3.2.26` must collapse to one algorithm identity. Maintain `policy/algorithm_aliases.yaml` mapping every observed spelling → canonical family + OID. Without this the dashboard counts the same algorithm four times.
+`SHA-1`, `sha1`, `SHA1WithRSA`, and OID `1.3.14.3.2.26` must collapse to one algorithm identity. Maintain `policy/algorithm_aliases.yaml` mapping every observed spelling → canonical family + OID, each entry cited. Without this the dashboard counts the same algorithm four times. A spelling the table does not carry keeps its own name and is stamped `identity_resolved: false` — never guessed.
 
 This is the single fiddliest part of the build. Budget a day.
 
@@ -510,6 +550,10 @@ Two mismatches are **not** drift and must not be flagged:
 
 - **Different scope.** Config sets a server-wide floor; the probe tested one virtual host. Record scope on findings and only compare like with like.
 - **Unreachable code.** A `source_layer: source` MD5 call in an unimported module is a low-priority finding, not a config conflict. Alignment only compares `live` against `config`.
+
+Scope turns on precedence. An nginx `ssl_protocols` outside a `server` block is a default a vhost may override, so it is not held against one probed vhost. An `openssl.cnf` `MinProtocol` is a floor the library enforces, so a handshake below it is a contradiction nothing above it explains — the demo's headline note. Nothing infers which config governs which host: approve two hosts' configs in one scan and each floor is compared against each probed service.
+
+Every note ends with the same sentence declining to say whether the difference is a misconfiguration or a deliberate exception.
 
 ### Mode behaviour
 
@@ -629,7 +673,7 @@ Output waves, not a sorted list. A ranked list that puts a three-year rewrite at
 | `wave_1` | `quantum_vulnerable`, confidentiality, `urgency_years > 0`, `action_class` in (config, library_upgrade) |
 | `wave_2` | `quantum_vulnerable`, confidentiality, `urgency_years > 0`, `action_class` in (code_change, hardware) |
 | `wave_3` | `quantum_vulnerable`, authentication primitive, or `urgency_years <= 0` |
-| `verify` | `confidence = low` or `verdict = unknown` |
+| `verify` | `confidence = low`, `verdict = unknown`, or a confidentiality finding with no X supplied |
 
 `wave_2` is deliberately separated from `wave_1`: high effort is *why* it is urgent, and it needs budgeting now even though it finishes later.
 
@@ -662,14 +706,16 @@ An auditor must be able to reconstruct any wave from this object. If it cannot b
 
 ### Dashboard (React)
 
+One shell around all six screens: a sidebar with the current scan and the screens (with counts once a scan has finished), a top bar naming the scan and its state, and the policy staleness banner. Visual design follows `frontend/docs/designs/` — 24 mockups, one per screen state — and `TOKENS.md`, measured from them; `src/styles/tokens.css` implements it. Every screen draws its empty, running and error states explicitly; none shows a blank panel.
+
 Six screens:
 
-1. **New scan** — scope only: mode selector, source input (a folder picker for *Local folder*, a text field for a repo URL or image tag), probe host field. No X and no Z: X is answered on the next screen against the real file tree, and Z belongs beside the waves it moves. A `probe_only` scan never reaches the approval screen, so that mode alone carries an X field here.
-2. **File selection** — checkbox tree with select-all, expand/collapse, per-directory toggle, count of selected. Also where X is answered: a scan-wide years field in the toolbar, and a years field on every row. Setting a directory applies to every file beneath it; rows differing from the scan-wide value are shaded. Blocks until submitted.
-3. **Overview** — PQC readiness percentage, verdict distribution, wave breakdown, recommendation status counts (recommended / blocked / no_path / unknown), policy version + staleness banner, and the Z slider (opens at 5; the pack's own figure is shown beside it) with the report and export buttons
-4. **Findings** — filterable table: verdict, wave, collector, confidence, source layer. Drill into any row for full rationale and evidence.
-5. **Drift** — alignment notes side by side: what config declares, what the probe observed, the note. Shows the skipped state when not applicable.
-6. **Roadmap** — findings grouped by wave, each with target, prerequisites, action class.
+1. **New scan** (`/`) — scope only: mode selector (*Files only*, *Files + network probe*, *Network probe only*), source (*Git repository* URL, *Local directory* folder picker, *Docker image tar* file picker), probe targets. No X and no Z: X is answered on the next screen against the real file tree, and Z belongs beside the waves it moves. A `probe_only` scan never reaches the approval screen, so that mode alone carries an X field here. The folder picker shows how many vendored/build files it dropped. Recent scans and the loaded policy pack sit beside the form. The `folder` and `docker_image` sources are API-only and not offered.
+2. **File selection** (`/scans/:id/files`) — checkbox tree with select-all, expand/collapse, per-directory toggle, path substring/glob filter, count of selected, selected-by-extension, and the default exclusions. While a filter is set, folder checkboxes and select-all act only on visible files. Also where X is answered: a scan-wide years field (opens at 20), and a years field on every row. Setting a directory applies to every file beneath it; rows differing from the scan-wide value are shaded. Blocks until submitted.
+3. **Overview** (`/scans/:id`) — PQC readiness percentage, verdict distribution, by primitive, by collector, wave breakdown, recommendation status counts (recommended / blocked / no_path / unknown), policy version + staleness banner, the Mosca panel with the Z slider (1–40, opens at 5; the pack's own figure is shown beside it; the chosen Z is remembered per scan in the browser, and the page re-scores on open if the stored rows were scored at a different Z), and exports: CycloneDX CBOM, PDF report, HTML report, CBOM import.
+4. **Findings** (`/scans/:id/findings`) — filterable table: verdict, wave, collector, confidence, source layer, free text. Filters live in the URL. Only values this scan carries (the API's facets) can be picked; the rest are shown as "none in this scan". Drill into any row for verdict + citation, Mosca inputs with `x_source` / `y_source`, recommendations and raw evidence. If verdicts are missing, a banner says waves and recommendations are withheld.
+5. **Drift** (`/scans/:id/drift`) — per service, what config declares beside what the probe observed, and the note; each service is *Diverges* or *Match*, never ranked. Shows the skipped state with its reason when not applicable.
+6. **Roadmap** (`/scans/:id/roadmap`) — findings by wave, each item with target, prerequisites in order, action class and Mosca inputs, ordered by urgency within the wave. Rows are grouped per file and algorithm with a count (62 identical `AES.new` calls in one module are one thing to change); findings with different X stay separate. Blocked work is also counted by work item, beside the per-finding rows. Grouping is presentation only — `/roadmap` returns every finding.
 
 ### CycloneDX export
 
@@ -677,7 +723,7 @@ Six screens:
 
 ### PDF report
 
-`GET /api/scans/{id}/report.pdf`. Render an HTML template through WeasyPrint. Sections: scan metadata + policy version, executive summary (readiness %, wave counts), wave-by-wave findings, drift notes, blocked prerequisites, unknown findings, methodology and citations.
+`GET /api/scans/{id}/report.pdf`. Render an HTML template through WeasyPrint. Sections: scan metadata + policy version, executive summary (readiness %, wave counts), wave-by-wave findings, drift notes, blocked prerequisites, unknown findings, methodology and citations. When WeasyPrint's native libraries are missing, answer 503 with the reason, not a stack trace; `GET /api/scans/{id}/report.html` serves the same document unrendered.
 
 ---
 
@@ -693,7 +739,11 @@ Six screens:
 - A **compiled C binary** linked against libcrypto, with symbols intact.
 - A **CycloneDX file** from an external tool for the import path.
 
-Also include a host that *is* correctly configured, so the report shows both green and red.
+Also include a host that *is* correctly configured, so the report shows both green and red — `nginx-strong` on 8444, TLS 1.3 only with ECDSA P-256: no drift, still quantum-vulnerable.
+
+Every deliberate weakness carries an `ECDAT-EXPECT:` marker on the line a collector should anchor to; tests assert against markers, not line numbers.
+
+The demo certificates (`demo/certs/`) and the compiled binary (`demo/cbin/build/cryptodemo`) are committed, so a `files` scan of `demo/` needs no Docker; `demo/gen_certs.sh --force` regenerates the certificates. The keys are toy material and must never be reused.
 
 ---
 
@@ -716,6 +766,8 @@ Also include a host that *is* correctly configured, so the report shows both gre
 
 **If time runs short, cut in this order:** PDF, CBOM import, binary collector, code collector. Never cut the network probe, alignment check, or risk scorer — those three are the entire differentiation.
 
+All fourteen steps are done. Added since: browser folder upload, Docker image tar upload, collector diagnostics, quantum-safe visibility, per-file X with per-action-class Y, the dashboard redesign, and certificate extension resilience.
+
 ---
 
 ## 16. Tests that must exist
@@ -731,8 +783,11 @@ Also include a host that *is* correctly configured, so the report shows both gre
 - A finding no `pqc_targets` rule matches falls back to `y_years_default`, and `y_source` says so
 - Identity resolution: `SHA-1`, `sha1`, `1.3.14.3.2.26` collapse to one algorithm
 - The probe refuses a host not in `scan.probe_targets`
+- A confidentiality finding in a scan approved with no X lands in `verify`
 - A private key file produces a metadata-only finding and its bytes are never parsed
+- A certificate whose extensions cannot be decoded still yields its key, signature and validity findings, with `extensions_error` in the evidence
 - An unapproved file path is never opened by any collector
+- An upload manifest or layer tar entry with an absolute path, `..` or a link is refused
 - Alignment returns `skipped` in `probe_only` mode
 - Exported CycloneDX validates against the 1.6 schema
 - A policy entry without a `source` field fails to load
